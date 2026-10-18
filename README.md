@@ -23,3 +23,5 @@ def generate_c_library(
  - `virt_formulas` represents a list of user-defined functions in Python syntax to evaluate for each of the output values.
 
 The return is a single `str` containing the generated code. This is intended to be sent to and compiled on the remote target during a setup phase, where the resulting `.so` will be called.
+
+For information on usage, see [ref.md](/ref.md). For a demonstration of the main function, see [main.py](/src/main.py) and subsequently the generated code in [main.c](/src/main.c).
