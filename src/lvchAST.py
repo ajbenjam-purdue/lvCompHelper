@@ -146,6 +146,7 @@ class CMathTranspiler(ast.NodeVisitor):
         return f"({self.UNARY_OPS[op_type]}{operand})"
 
     def visit_BinOp(self, node: ast.BinOp) -> str:
+        
         op_type = type(node.op)
         if op_type not in self.BIN_OPS:
             raise ValueError(f"Unsupported binary operator: {op_type.__name__}")
@@ -160,6 +161,21 @@ class CMathTranspiler(ast.NodeVisitor):
         
         # Guard against division by zero to prevent NaN/Inf propagation in RT loop
         if op_type is ast.Div:
+            
+            if isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant):
+                
+                # Left and right are constants or names, static eval
+                return f"{float(left) / float(right)}"
+            
+            elif isinstance(node.right, ast.Constant):
+                
+                # Right is constant, eval for divbyzero
+                if float(right) != 0:
+                    return f"({left}) / ({right})"
+                else:
+                    raise ZeroDivisionError(f"Denominator statically evaluates to zero: {left} / {right}")
+            
+            # Guard is necessary
             return f"(({right}) != 0.0 ? ({left}) / ({right}) : 0.0)"
 
         return f"({left} {op_str} {right})"
@@ -232,11 +248,14 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
         "#include <math.h>\n",
         "void evaluate_channels (const double* __restrict__ phys, double* __restrict__ virt) {\n"
     ]
-    lines.extend([
-        f"\t// {v_name} = {virt_formulas[virt_labels.index(v_name)]}"
-        f"{"" if c_valid[v_name] else " (INVALID)"}\n"
-        f"\tvirt[{virt_map[v_name]}] = {c_statements[v_name]};\n"
-        for v_name in execution_order
-    ])
+    if len(execution_order) > 0:
+        lines.extend([
+            f"\t// {v_name} = {virt_formulas[virt_labels.index(v_name)]}"
+            f"{"" if c_valid[v_name] else " (INVALID)"}\n"
+            f"\tvirt[{virt_map[v_name]}] = {c_statements[v_name]};\n"
+            for v_name in execution_order
+        ])
+    else:
+        lines.append("\t// No inputs provided\n")
     lines.extend(["}", "", "// End of generated code"])
     return "\n".join(lines)
