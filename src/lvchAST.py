@@ -14,7 +14,7 @@ class CMathTranspiler(ast.NodeVisitor):
     """
     
     # Two arg operations
-    BIN_OPS = {
+    BIN_OPS:dict[object, str] = {
         ast.Add: "+",
         ast.Sub: "-",
         ast.Mult: "*",
@@ -24,33 +24,33 @@ class CMathTranspiler(ast.NodeVisitor):
     }
     
     # - or +
-    UNARY_OPS = {
+    UNARY_OPS:dict[object, str] = {
         ast.UAdd: "+",
         ast.USub: "-"
     }
 
     # Comparisons
-    CMP_OPS = {
+    CMP_OPS:dict[object, str] = {
         ast.Gt: ">", ast.GtE: ">=",
         ast.Lt: "<", ast.LtE: "<=",
         ast.Eq: "==", ast.NotEq: "!="
     }
 
     # Booleans
-    BOOL_OPS = {
+    BOOL_OPS:dict[object, str] = {
         ast.And: "&&",
         ast.Or: "||",
     }
 
     # Whitelist of allowed C math funcs and expected argument counts
-    MATH_FUNCS = {
+    MATH_FUNCS:dict[str,int] = {
         "sin": 1, "cos": 1, "tan": 1, 
         "exp": 1, "log": 1, "log10": 1, "sqrt": 1, "fabs": 1, "abs": 1,
         "ceil": 1, "floor": 1, "round": 1,
         "pow": 2, "fmin": 2, "fmax": 2
     }
 
-    CONSTANTS = {
+    CONSTANTS:dict[str,str] = {
         "pi": "3.14159265",
         "tau": "6.28318531",
         "e": "2.71828182"
