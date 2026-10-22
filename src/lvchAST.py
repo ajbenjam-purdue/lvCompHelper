@@ -59,6 +59,20 @@ class Function(ABC):
         tail:str = "}"
         return "\n\t".join([self.signature + " {"] + self.body_lines) + "\n" + tail
 
+class Dummy(Function):
+    name:str = "_dummy"
+    args_py:list[str] = []
+    args_tr:list[str] = []
+    header_dependencies:list[str] = []
+    body:str = """
+    // Dummy test function to return 1.0
+    return 1.0;
+    """
+    docstring:str = """
+    A dummy test function to return 1.0
+    Accepts no arguments
+    """
+
 class PID(Function):
     name:str = "PID"
     args_py:list[str] = ["pv", "sp", "gain_p", "gain_d", "gain_i"]
