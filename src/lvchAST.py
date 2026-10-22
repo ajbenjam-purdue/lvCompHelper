@@ -77,7 +77,7 @@ class PID(Function):
     name:str = "PID"
     args_py:list[str] = ["pv", "sp", "gain_p", "gain_d", "gain_i"]
     args_tr:list[str] = ["last_pv", "acc_err"]
-    header_dependencies:list[str] = []
+    header_dependencies:list[str] = ["math.h"]
     body:str = """
     // PID Controller
     // Uses pure gains (not times)
