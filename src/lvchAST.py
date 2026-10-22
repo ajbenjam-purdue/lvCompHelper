@@ -101,7 +101,7 @@ class PID(Function):
     """
 
 class PIDa(Function):
-    name:str = "PID"
+    name:str = "PIDa"
     args_py:list[str] = ["pv", "sp", "gain_p", "gain_d", "gain_i", "wu_err", "out_lo", "out_hi"]
     args_tr:list[str] = ["last_pv", "acc_err"]
     header_dependencies:list[str] = ["math.h"]
@@ -266,8 +266,8 @@ class CMathTranspiler(ast.NodeVisitor):
     # Third party C function names and binds
     FUNCTIONS:dict[str, type[Function]] = {
         "dummy" : Dummy,
-        "pid" : PID,
-        "pida" : PIDa,
+        "PID" : PID,
+        "PIDa" : PIDa,
         "elapsed" : Elapsed,
         "time_delta" : Time_delta,
         "_safe_divide" : _safe_divide
