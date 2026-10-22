@@ -416,6 +416,12 @@ class CMathTranspiler(ast.NodeVisitor):
             if len(node.args) != expected_args:
                 raise ValueError(f"'{func_name}()' expects {expected_args} args, got {len(node.args)}")
 
+            # Check for static expr
+            if all([isinstance(arg, ast.Constant) for arg in node.args]):
+                
+                # Evaluate with python analog
+                return f"{self.MATH_FUNCS[func_name][3](*[float(self.visit(x)) for x in node.args])}"
+            
             c_func = "fabs" if func_name == "abs" else func_name
             self.builtin_deps.add(func_name)
             
@@ -426,7 +432,7 @@ class CMathTranspiler(ast.NodeVisitor):
             func = self.FUNCTIONS[func_name]()
              
             if len(node.args) != func.fixed_registers:
-                return f"0.0 /* Invalid arguments! Expected: {func.signature_py}, received {len(node.args)} arguments: {", ".join(args_raw)} */"
+                raise AttributeError(f"Invalid arguments! Expected: {func.signature_py}, received {len(node.args)} arguments: {", ".join(args_raw)}")
             
             args:list[str] = [arg for arg in args_raw]
             
@@ -469,25 +475,29 @@ class CMathTranspiler(ast.NodeVisitor):
 
 def get_functions() -> list[str]:
     transpiler = CMathTranspiler({}, {})
+    
+    # Get all funcs
     math_funcs = [f"{func_name}({", ".join([_GENERIC_ARGS[i] for i in range(func_args[0])])})\n  {func_args[1]}"
                   for func_name, func_args in transpiler.MATH_FUNCS.items()]
     cust_funcs = [f"{func().signature_py}\n{func().docs}"
                   for func in transpiler.FUNCTIONS.values()]
-    return math_funcs + cust_funcs
+    
+    # Show only ext funcs
+    return [x for x in math_funcs + cust_funcs if not x.startswith("_")]
 
 def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_formulas: list[str], tab_spaces: int=0) -> tuple[str, int]:
-    # I think this can't return a tuple for LV but we will see
+    # This CAN return a tuple!
     phys_map = {name: i for i, name in enumerate(phys_channels)}
     virt_map = {name: i for i, name in enumerate(virt_labels)}
 
     transpiler = CMathTranspiler(phys_map, virt_map)
     c_statements:dict[str,str] = {}
-    c_valid:dict[str,bool] = {}
+    c_valid:dict[str,tuple[bool, str]] = {}
     graph:dict[str,set[str]] = {}
 
     for v_name, formula in zip(virt_labels, virt_formulas):
-        c_expr, deps = transpiler.transpile(formula)
-        c_valid[v_name] = c_expr != ""
+        c_expr, deps, c_err = transpiler.transpile(formula)
+        c_valid[v_name] = (c_expr != "", c_err)
         c_statements[v_name] = c_expr if c_expr != "" else "0.0"
         graph[v_name] = deps
 
