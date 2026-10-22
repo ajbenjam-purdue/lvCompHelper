@@ -9,6 +9,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+_GENERIC_ARGS = ['x', 'y', 'z', 'a', 'b', 'c']
+
 class Function(ABC):
     """Parent class for functions
     
@@ -19,6 +21,7 @@ class Function(ABC):
     args_py:list[str] = []
     args_tr:list[str] = []
     body:str = ""
+    docstring:str = ""
     
     def __init__(self) -> None:
         pass
@@ -45,6 +48,10 @@ class Function(ABC):
     def signature(self) -> str:
         return f"double {self.name}({", ".join([f"double {i}" for i in self.args_py] + [f"double* {i}" for i in self.args_tr])})"
     
+    @property
+    def docs(self) -> str:
+        return "  " + "\n    ".join([x.strip() for x in self.docstring.strip().split('\n')])
+    
     def __str__(self) -> str:
         """Return the C string representation of the function"""
         
@@ -65,6 +72,14 @@ class PID(Function):
     *last_pv = pv;                // Proc var
     
     return gain_p * p_err + gain_d * d_err + gain_i * *acc_err;
+    """
+    docstring:str = """
+    Create a transient PID controller following gain logic.
+    pv: process variable
+    sp: setpoint
+    gain_p: proportional gain
+    gain_d: derivative gain
+    gain_i: integral gain
     """
 
 class CMathTranspiler(ast.NodeVisitor):
@@ -102,11 +117,22 @@ class CMathTranspiler(ast.NodeVisitor):
     }
 
     # Whitelist of allowed C math funcs and expected argument counts
-    MATH_FUNCS:dict[str, int] = {
-        "sin": 1, "cos": 1, "tan": 1, 
-        "exp": 1, "log": 1, "log10": 1, "sqrt": 1, "fabs": 1, "abs": 1,
-        "ceil": 1, "floor": 1, "round": 1,
-        "pow": 2, "fmin": 2, "fmax": 2
+    MATH_FUNCS:dict[str, tuple[int, str]] = {
+        "sin": (1, "Returns the sine of the input (radians)"), 
+        "cos": (1, "Returns the cosine of the input (radians)"), 
+        "tan": (1, "Returns the tangent of the input (radians)"), 
+        "exp": (1, "Returns Euler's number raised to the input power"), 
+        "log": (1, "Returns the natural logarithm of the input"), 
+        "log10": (1, "Returns the base-10 logarithm of the input"), 
+        "sqrt": (1, "Returns the square root of the input"), 
+        "fabs": (1, "Returns the absolute value of the input. Same as abs()"),
+        "abs": (1, "Returns the absolute value of the input. Same as fabs()"),
+        "ceil": (1, "Returns the ceiling-rounded value of the input"), 
+        "floor": (1, "Returns the floor-rounded value of the input"), 
+        "round": (1, "Returns the half-up-rounded value fo the input"),
+        "pow": (2, "Returns the x to the y power"), 
+        "fmin": (2, "Returns the minimum of x and y"), 
+        "fmax": (2, "Returns the maximum of x and y")
     }
 
     CONSTANTS:dict[str, str] = {
@@ -256,7 +282,7 @@ class CMathTranspiler(ast.NodeVisitor):
         args_raw = [str(self.visit(arg)) for arg in node.args]
         
         if func_name in self.MATH_FUNCS:
-            expected_args = self.MATH_FUNCS[func_name]
+            expected_args = self.MATH_FUNCS[func_name][0]
             if len(node.args) != expected_args:
                 raise ValueError(f"'{func_name}()' expects {expected_args} args, got {len(node.args)}")
 
@@ -309,8 +335,16 @@ class CMathTranspiler(ast.NodeVisitor):
     def generic_visit(self, node: ast.AST):
         raise ValueError(f"Disallowed syntax in expression: {type(node).__name__}")
 
+def get_functions() -> list[str]:
+    transpiler = CMathTranspiler({}, {})
+    math_funcs = [f"{func_name}({", ".join([_GENERIC_ARGS[i] for i in range(func_args[0])])})\n  {func_args[1]}"
+                  for func_name, func_args in transpiler.MATH_FUNCS.items()]
+    cust_funcs = [f"{func().signature_py}\n{func().docs}"
+                  for func in transpiler.FUNCTIONS.values()]
+    return math_funcs + cust_funcs
 
 def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_formulas: list[str]) -> tuple[str, int]:
+    # I think this can't return a tuple for LV but we will see
     phys_map = {name: i for i, name in enumerate(phys_channels)}
     virt_map = {name: i for i, name in enumerate(virt_labels)}
 
