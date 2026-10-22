@@ -221,7 +221,7 @@ class CMathTranspiler(ast.NodeVisitor):
         raise ValueError(f"Disallowed syntax in expression: {type(node).__name__}")
 
 
-def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_formulas: list[str]) -> str:
+def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_formulas: list[str], tab_spaces: int=0) -> str:
     phys_map = {name: i for i, name in enumerate(phys_channels)}
     virt_map = {name: i for i, name in enumerate(virt_labels)}
 
@@ -258,4 +258,6 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
     else:
         lines.append("\t// No inputs provided\n")
     lines.extend(["}", "", "// End of generated code"])
+    if tab_spaces > 0:
+        lines = [line.replace('\t', ' ' * tab_spaces) for line in lines]
     return "\n".join(lines)
