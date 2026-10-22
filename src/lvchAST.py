@@ -360,6 +360,3 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
         lines.append("\t// No inputs provided\n")
     lines.extend(["}", "", "// End of generated code"])
     return ("\n".join(lines), transpiler.tr_idx)
-
-if __name__ == "__main__":
-    print(PID())
