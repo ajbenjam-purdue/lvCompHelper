@@ -98,7 +98,46 @@ class PID(Function):
     gain_i: integral gain
     """
 
-class elapsed(Function):
+class PIDa(Function):
+    name:str = "PID"
+    args_py:list[str] = ["pv", "sp", "gain_p", "gain_d", "gain_i", "wu_err", "out_lo", "out_hi"]
+    args_tr:list[str] = ["last_pv", "acc_err"]
+    header_dependencies:list[str] = ["math.h"]
+    body:str = """
+    // Advanced PID Controller
+    // Uses pure gains (not times)
+    // Includes an anti-windup maximum proportional error
+    // If |pv-sp| is greater than this, integration does not occur
+    // Includes low and high limits for the output
+    
+    double p_err = sp - pv;       // Proportional error
+    double d_err = *last_pv - pv; // Derivative error
+    if (fabs(p_err) <= wu_err) {
+        *acc_err += p_err; // Integral error
+    }
+    else {
+        *acc_err = 0;
+    }
+    *last_pv = pv; // Proc var
+    
+    double cmd = gain_p * p_err + gain_d * d_err + gain_i * *acc_err;
+    
+    // Limit output
+    return fmin(out_hi, fmax(cmd, out_lo));
+    """
+    docstring:str = """
+    Create an advanced transient PID controller following gain logic.
+    pv: process variable
+    sp: setpoint
+    gain_p: proportional gain
+    gain_d: derivative gain
+    gain_i: integral gain
+    wu_err: windup error (|pv-sp| must be less than this for integration)
+    out_lo: output limit low
+    out_hi: output limit high
+    """
+
+class Elapsed(Function):
     name:str = "elapsed"
     args_py:list[str] = []
     args_tr:list[str] = ["start_s", "start_ns"]
@@ -122,7 +161,7 @@ class elapsed(Function):
     Return the elapsed time from the start of the logging in seconds.
     """
 
-class time_delta(Function):
+class Time_delta(Function):
     name:str = "time_delta"
     args_py:list[str] = []
     args_tr:list[str] = ["prev_s", "prev_ns"]
@@ -224,9 +263,11 @@ class CMathTranspiler(ast.NodeVisitor):
 
     # Third party C function names and binds
     FUNCTIONS:dict[str, type[Function]] = {
-        "PID" : PID,
-        "elapsed" : elapsed,
-        "time_delta" : time_delta,
+        "dummy" : Dummy,
+        "pid" : PID,
+        "pida" : PIDa,
+        "elapsed" : Elapsed,
+        "time_delta" : Time_delta,
         "_safe_divide" : _safe_divide
     }
 
