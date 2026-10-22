@@ -108,6 +108,47 @@ class elapsed(Function):
     Return the elapsed time from the start of the logging in seconds.
     """
 
+class time_delta(Function):
+    name:str = "time_delta"
+    args_py:list[str] = []
+    args_tr:list[str] = ["prev_s", "prev_ns"]
+    header_dependencies:list[str] = ["time.h"]
+    body:str = """
+    // Elapsed time in seconds
+    
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    
+    if (*prev_s == 0.0) {
+        *prev_s  = (double)now.tv_sec;
+        *prev_ns = (double)now.tv_nsec;
+        return 1.0;
+    }
+    
+    double elapsed = (now.tv_sec - *prev_s) + (now.tv_nsec - *prev_ns) * 1e-9;
+    *prev_s = (double)now.tv_sec;
+    *prev_ns = (double)now.tv_nsec;
+    
+    return elapsed;
+    """
+    docstring:str = """
+    Return the elapsed time from the start of the logging in seconds (or zero on startup).
+    """
+
+class _safe_divide(Function):
+    name:str = "_safe_divide"
+    args_py:list[str] = ["x", "y"]
+    args_tr:list[str] = []
+    header_dependencies:list[str] = ["math.h"]
+    body:str = """
+    // Zero-checked division
+    
+    return y != 0.0 ? x / y : 0.0;
+    """
+    docstring:str="""
+    Return (x / y) or 0.0 if y is zero.
+    """
+
 class CMathTranspiler(ast.NodeVisitor):
     """
     Walks a Python expression AST and emits C
@@ -170,7 +211,9 @@ class CMathTranspiler(ast.NodeVisitor):
     # Third party C function names and binds
     FUNCTIONS:dict[str, type[Function]] = {
         "PID" : PID,
-        "elapsed" : elapsed
+        "elapsed" : elapsed,
+        "time_delta" : time_delta,
+        "_safe_divide" : _safe_divide
     }
 
     def __init__(self, phys_map: dict[str, int], virt_map: dict[str, int]):
@@ -276,6 +319,10 @@ class CMathTranspiler(ast.NodeVisitor):
 
         # Exponents and float modulo translate to C functions
         if op_type in (ast.Pow, ast.Mod):
+            
+            # Add to get math.h
+            self.builtin_deps.add("pow")
+            
             return f"{op_str}({left}, {right})"
         
         # Guard against division by zero to prevent NaN/Inf propagation in RT loop
@@ -284,6 +331,8 @@ class CMathTranspiler(ast.NodeVisitor):
             if isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant):
                 
                 # Left and right are constants or names, static eval
+                if float(right) == 0.0:
+                    return f"0.0"
                 return f"{float(left) / float(right)}"
             
             elif isinstance(node.right, ast.Constant):
@@ -295,7 +344,8 @@ class CMathTranspiler(ast.NodeVisitor):
                     raise ZeroDivisionError(f"Denominator statically evaluates to zero: {left} / {right}")
             
             # Guard is necessary
-            return f"(({right}) != 0.0 ? ({left}) / ({right}) : 0.0)"
+            self.function_deps.add("_safe_divide")
+            return f"_safe_divide({left}, {right})"
 
         return f"({left} {op_str} {right})"
 
