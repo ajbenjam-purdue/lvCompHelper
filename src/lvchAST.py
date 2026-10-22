@@ -3,7 +3,9 @@ import ast
 from pathlib import Path
 from datetime import datetime
 from graphlib import TopologicalSorter, CycleError
+from typing import Callable, Any
 from abc import ABC
+import math
 
 import logging
 
@@ -237,22 +239,22 @@ class CMathTranspiler(ast.NodeVisitor):
     }
 
     # Whitelist of allowed C math funcs and expected argument counts
-    MATH_FUNCS:dict[str, tuple[int, str, list[str]]] = {
-        "sin": (1, "Returns the sine of the input (radians)", ["math.h"]), 
-        "cos": (1, "Returns the cosine of the input (radians)", ["math.h"]), 
-        "tan": (1, "Returns the tangent of the input (radians)", ["math.h"]), 
-        "exp": (1, "Returns Euler's number raised to the input power", ["math.h"]), 
-        "log": (1, "Returns the natural logarithm of the input", ["math.h"]), 
-        "log10": (1, "Returns the base-10 logarithm of the input", ["math.h"]), 
-        "sqrt": (1, "Returns the square root of the input", ["math.h"]), 
-        "fabs": (1, "Returns the absolute value of the input. Same as abs()", ["math.h"]),
-        "abs": (1, "Returns the absolute value of the input. Same as fabs()", ["math.h"]),
-        "ceil": (1, "Returns the ceiling-rounded value of the input", ["math.h"]), 
-        "floor": (1, "Returns the floor-rounded value of the input", ["math.h"]), 
-        "round": (1, "Returns the half-up-rounded value fo the input", ["math.h"]),
-        "pow": (2, "Returns the x to the y power", ["math.h"]), 
-        "fmin": (2, "Returns the minimum of x and y", ["math.h"]), 
-        "fmax": (2, "Returns the maximum of x and y", ["math.h"])
+    MATH_FUNCS:dict[str, tuple[int, str, list[str], Callable[[Any], float]]] = {
+        "sin": (1, "Returns the sine of the input (radians)", ["math.h"], math.sin),
+        "cos": (1, "Returns the cosine of the input (radians)", ["math.h"], math.cos),
+        "tan": (1, "Returns the tangent of the input (radians)", ["math.h"], math.tan),
+        "exp": (1, "Returns Euler's number raised to the input power", ["math.h"], math.exp),
+        "log": (1, "Returns the natural logarithm of the input", ["math.h"], math.log),
+        "log10": (1, "Returns the base-10 logarithm of the input", ["math.h"], math.log10),
+        "sqrt": (1, "Returns the square root of the input", ["math.h"], math.sqrt), 
+        "fabs": (1, "Returns the absolute value of the input. Same as abs()", ["math.h"], abs),
+        "abs": (1, "Returns the absolute value of the input. Same as fabs()", ["math.h"], abs),
+        "ceil": (1, "Returns the ceiling-rounded value of the input", ["math.h"], math.ceil), 
+        "floor": (1, "Returns the floor-rounded value of the input", ["math.h"], math.floor), 
+        "round": (1, "Returns the half-up-rounded value fo the input", ["math.h"], round),
+        "pow": (2, "Returns the x to the y power", ["math.h"], math.pow),  # type: ignore
+        "fmin": (2, "Returns the minimum of x and y", ["math.h"], min), 
+        "fmax": (2, "Returns the maximum of x and y", ["math.h"], max)
     }
 
     CONSTANTS:dict[str, str] = {
@@ -287,7 +289,7 @@ class CMathTranspiler(ast.NodeVisitor):
         self.builtin_deps: set[str] = set()
         self.tr_idx: int = 0
 
-    def transpile(self, expr_str: str) -> tuple[str, set[str]]:
+    def transpile(self, expr_str: str) -> tuple[str, set[str], str]:
         """Transpile a string and return the result and its dependencies
 
         Args:
@@ -307,13 +309,10 @@ class CMathTranspiler(ast.NodeVisitor):
             tree = ast.parse(expr_str, mode="eval")
             c_expr = self.visit(tree.body)
             
-            return c_expr, set(self.channel_deps)
-        except ValueError as e:
-            logger.error(f"Invalid name: {e}")
+            return c_expr, set(self.channel_deps), ""
         except Exception as e:
-            logger.error(f"General exception: {e}")
-        
-        return "", set()
+            logger.error(f"Can't transpile \"{expr_str}\": {e}")
+            return "", set(), f"{e}"
 
     def visit_Constant(self, node: ast.Constant) -> str:
         """Visit a constant and force any number to a double literal
@@ -523,11 +522,11 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
         # double* phys: physical channel array (read)
         # double* virt: virtual channel array (write)
         # double* trans: transient data to carry data from previous frames
-    lines.append("void evaluate_channels (const double* __restrict__ phys, double* __restrict__ virt, double* __restrict__ trans) {\n")
+    lines.append("void evaluate_channels (const double* phys, double* virt, double* trans) {\n")
     if len(execution_order) > 0:
         lines.extend([
             f"\t// {v_name} = {virt_formulas[virt_labels.index(v_name)]}"
-            f"{"" if c_valid[v_name] else " (INVALID)"}\n"
+            f"{"" if c_valid[v_name][0] else f"\n\t// {c_valid[v_name][1]}"}\n"
             f"\tvirt[{virt_map[v_name]}] = {c_statements[v_name]};\n"
             for v_name in execution_order
         ])
