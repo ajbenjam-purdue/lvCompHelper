@@ -139,7 +139,7 @@ class _safe_divide(Function):
     name:str = "_safe_divide"
     args_py:list[str] = ["x", "y"]
     args_tr:list[str] = []
-    header_dependencies:list[str] = ["math.h"]
+    header_dependencies:list[str] = []
     body:str = """
     // Zero-checked division
     
