@@ -20,6 +20,7 @@ class Function(ABC):
     name:str = ""
     args_py:list[str] = []
     args_tr:list[str] = []
+    header_dependencies:list[str] = []
     body:str = ""
     docstring:str = ""
     
@@ -62,6 +63,7 @@ class PID(Function):
     name:str = "PID"
     args_py:list[str] = ["pv", "sp", "gain_p", "gain_d", "gain_i"]
     args_tr:list[str] = ["last_pv", "acc_err"]
+    header_dependencies:list[str] = []
     body:str = """
     // PID Controller
     // Uses pure gains (not times)
@@ -80,6 +82,30 @@ class PID(Function):
     gain_p: proportional gain
     gain_d: derivative gain
     gain_i: integral gain
+    """
+
+class elapsed(Function):
+    name:str = "elapsed"
+    args_py:list[str] = []
+    args_tr:list[str] = ["start_s", "start_ns"]
+    header_dependencies:list[str] = ["time.h"]
+    body:str = """
+    // Elapsed time in seconds
+    
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    
+    if (*start_s == 0.0) {
+        *start_s  = (double)now.tv_sec;
+        *start_ns = (double)now.tv_nsec;
+        return 0.0;
+    }
+    
+    double total_elapsed = (now.tv_sec - *start_s) + (now.tv_nsec - *start_ns) * 1e-9;
+    return total_elapsed;
+    """
+    docstring:str = """
+    Return the elapsed time from the start of the logging in seconds.
     """
 
 class CMathTranspiler(ast.NodeVisitor):
@@ -117,22 +143,22 @@ class CMathTranspiler(ast.NodeVisitor):
     }
 
     # Whitelist of allowed C math funcs and expected argument counts
-    MATH_FUNCS:dict[str, tuple[int, str]] = {
-        "sin": (1, "Returns the sine of the input (radians)"), 
-        "cos": (1, "Returns the cosine of the input (radians)"), 
-        "tan": (1, "Returns the tangent of the input (radians)"), 
-        "exp": (1, "Returns Euler's number raised to the input power"), 
-        "log": (1, "Returns the natural logarithm of the input"), 
-        "log10": (1, "Returns the base-10 logarithm of the input"), 
-        "sqrt": (1, "Returns the square root of the input"), 
-        "fabs": (1, "Returns the absolute value of the input. Same as abs()"),
-        "abs": (1, "Returns the absolute value of the input. Same as fabs()"),
-        "ceil": (1, "Returns the ceiling-rounded value of the input"), 
-        "floor": (1, "Returns the floor-rounded value of the input"), 
-        "round": (1, "Returns the half-up-rounded value fo the input"),
-        "pow": (2, "Returns the x to the y power"), 
-        "fmin": (2, "Returns the minimum of x and y"), 
-        "fmax": (2, "Returns the maximum of x and y")
+    MATH_FUNCS:dict[str, tuple[int, str, list[str]]] = {
+        "sin": (1, "Returns the sine of the input (radians)", ["math.h"]), 
+        "cos": (1, "Returns the cosine of the input (radians)", ["math.h"]), 
+        "tan": (1, "Returns the tangent of the input (radians)", ["math.h"]), 
+        "exp": (1, "Returns Euler's number raised to the input power", ["math.h"]), 
+        "log": (1, "Returns the natural logarithm of the input", ["math.h"]), 
+        "log10": (1, "Returns the base-10 logarithm of the input", ["math.h"]), 
+        "sqrt": (1, "Returns the square root of the input", ["math.h"]), 
+        "fabs": (1, "Returns the absolute value of the input. Same as abs()", ["math.h"]),
+        "abs": (1, "Returns the absolute value of the input. Same as fabs()", ["math.h"]),
+        "ceil": (1, "Returns the ceiling-rounded value of the input", ["math.h"]), 
+        "floor": (1, "Returns the floor-rounded value of the input", ["math.h"]), 
+        "round": (1, "Returns the half-up-rounded value fo the input", ["math.h"]),
+        "pow": (2, "Returns the x to the y power", ["math.h"]), 
+        "fmin": (2, "Returns the minimum of x and y", ["math.h"]), 
+        "fmax": (2, "Returns the maximum of x and y", ["math.h"])
     }
 
     CONSTANTS:dict[str, str] = {
@@ -143,7 +169,8 @@ class CMathTranspiler(ast.NodeVisitor):
 
     # Third party C function names and binds
     FUNCTIONS:dict[str, type[Function]] = {
-        "PID" : PID
+        "PID" : PID,
+        "elapsed" : elapsed
     }
 
     def __init__(self, phys_map: dict[str, int], virt_map: dict[str, int]):
@@ -159,6 +186,7 @@ class CMathTranspiler(ast.NodeVisitor):
         # Placeholder for future use
         self.channel_deps: set[str] = set()
         self.function_deps: set[str] = set()
+        self.builtin_deps: set[str] = set()
         self.tr_idx: int = 0
 
     def transpile(self, expr_str: str) -> tuple[str, set[str]]:
@@ -176,8 +204,6 @@ class CMathTranspiler(ast.NodeVisitor):
         try:
             # Reset placeholders
             self.channel_deps.clear()
-            self.function_deps.clear()
-            tr_idx = 0
             
             # Parse and translate
             tree = ast.parse(expr_str, mode="eval")
@@ -287,6 +313,8 @@ class CMathTranspiler(ast.NodeVisitor):
                 raise ValueError(f"'{func_name}()' expects {expected_args} args, got {len(node.args)}")
 
             c_func = "fabs" if func_name == "abs" else func_name
+            self.builtin_deps.add(func_name)
+            
             return f"{c_func}({", ".join(args_raw)})"
         
         elif func_name in self.FUNCTIONS:
@@ -366,10 +394,18 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
     except CycleError as e:
         raise ValueError(f"Circular dependency detected in virtual channels: {e}")
 
+    # Get header deps
+    header_deps:set[str] = set()
+    for dep in transpiler.builtin_deps:
+        for a in transpiler.MATH_FUNCS[dep][2]:
+            header_deps.add(a)
+    for dep in transpiler.function_deps:
+        for a in transpiler.FUNCTIONS[dep]().header_dependencies:
+            header_deps.add(a)
     
     lines = [
         f"// Generated by main.py ({Path().resolve()}, {datetime.now()})\n",
-        f"#include <math.h>\n"]
+        *[f"#include <{x}>" for x in header_deps], ""]
 
     if transpiler.function_deps:
         lines.extend([
