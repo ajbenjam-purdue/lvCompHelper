@@ -393,14 +393,19 @@ class CMathTranspiler(ast.NodeVisitor):
                 
                 # Right is constant, eval for divbyzero
                 if float(right) != 0:
-                    return f"({left}) / ({right})"
+                    return f"({left}) * ({1.0 / float(right)})"
                 else:
                     raise ZeroDivisionError(f"Denominator statically evaluates to zero: {left} / {right}")
             
             # Guard is necessary
             self.function_deps.add("_safe_divide")
             return f"_safe_divide({left}, {right})"
-
+        elif op_type is ast.Mult:
+            
+            if isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant):
+                
+                return f"{float(left) * float(right)}"
+            
         return f"({left} {op_str} {right})"
 
     def visit_Call(self, node: ast.Call) -> str:
