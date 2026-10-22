@@ -3,10 +3,151 @@ import ast
 from pathlib import Path
 from datetime import datetime
 from graphlib import TopologicalSorter, CycleError
+from abc import ABC
 
 import logging
 
 logger = logging.getLogger(__name__)
+
+_GENERIC_ARGS = ['x', 'y', 'z', 'a', 'b', 'c']
+
+class Function(ABC):
+    """Parent class for functions
+    
+    A function should accept user-facing arguments on the python side (`args_py`) and manage internal arguments on the C side (`args_tr`) for transient state.
+    Arguments for `args_py` will be passed as doubles while those for `args_tr` will be passed as pointers.
+    """
+    name:str = ""
+    args_py:list[str] = []
+    args_tr:list[str] = []
+    header_dependencies:list[str] = []
+    body:str = ""
+    docstring:str = ""
+    
+    def __init__(self) -> None:
+        pass
+    
+    @property
+    def body_lines(self) -> list[str]:
+        return [x.strip() for x in self.body.split("\n")]
+    
+    @property
+    def fixed_registers(self) -> int:
+        """Return the number of fixed regsiters needed for the call"""
+        return len(self.args_py)
+    
+    @property
+    def transient_registers(self) -> int:
+        """Return the number of transient registers needed"""
+        return len(self.args_tr)
+
+    @property
+    def signature_py(self) -> str:
+        return f"{self.name}({", ".join([f"{i}" for i in self.args_py])})"
+
+    @property
+    def signature(self) -> str:
+        return f"double {self.name}({", ".join([f"double {i}" for i in self.args_py] + [f"double* {i}" for i in self.args_tr])})"
+    
+    @property
+    def docs(self) -> str:
+        return "  " + "\n    ".join([x.strip() for x in self.docstring.strip().split('\n')])
+    
+    def __str__(self) -> str:
+        """Return the C string representation of the function"""
+        
+        tail:str = "}"
+        return "\n\t".join([self.signature + " {"] + self.body_lines) + "\n" + tail
+
+class PID(Function):
+    name:str = "PID"
+    args_py:list[str] = ["pv", "sp", "gain_p", "gain_d", "gain_i"]
+    args_tr:list[str] = ["last_pv", "acc_err"]
+    header_dependencies:list[str] = []
+    body:str = """
+    // PID Controller
+    // Uses pure gains (not times)
+    
+    double p_err = sp - pv;       // Proportional error
+    double d_err = *last_pv - pv; // Derivative error
+    *acc_err += p_err;            // Integral error
+    *last_pv = pv;                // Proc var
+    
+    return gain_p * p_err + gain_d * d_err + gain_i * *acc_err;
+    """
+    docstring:str = """
+    Create a transient PID controller following gain logic.
+    pv: process variable
+    sp: setpoint
+    gain_p: proportional gain
+    gain_d: derivative gain
+    gain_i: integral gain
+    """
+
+class elapsed(Function):
+    name:str = "elapsed"
+    args_py:list[str] = []
+    args_tr:list[str] = ["start_s", "start_ns"]
+    header_dependencies:list[str] = ["time.h"]
+    body:str = """
+    // Elapsed time in seconds
+    
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    
+    if (*start_s == 0.0) {
+        *start_s  = (double)now.tv_sec;
+        *start_ns = (double)now.tv_nsec;
+        return 0.0;
+    }
+    
+    double total_elapsed = (now.tv_sec - *start_s) + (now.tv_nsec - *start_ns) * 1e-9;
+    return total_elapsed;
+    """
+    docstring:str = """
+    Return the elapsed time from the start of the logging in seconds.
+    """
+
+class time_delta(Function):
+    name:str = "time_delta"
+    args_py:list[str] = []
+    args_tr:list[str] = ["prev_s", "prev_ns"]
+    header_dependencies:list[str] = ["time.h"]
+    body:str = """
+    // Elapsed time in seconds
+    
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    
+    if (*prev_s == 0.0) {
+        *prev_s  = (double)now.tv_sec;
+        *prev_ns = (double)now.tv_nsec;
+        return 1.0;
+    }
+    
+    double elapsed = (now.tv_sec - *prev_s) + (now.tv_nsec - *prev_ns) * 1e-9;
+    *prev_s = (double)now.tv_sec;
+    *prev_ns = (double)now.tv_nsec;
+    
+    return elapsed;
+    """
+    docstring:str = """
+    Return the elapsed time from the start of the logging in seconds (or zero on startup).
+    """
+
+class _safe_divide(Function):
+    name:str = "_safe_divide"
+    args_py:list[str] = ["x", "y"]
+    args_tr:list[str] = []
+    header_dependencies:list[str] = ["math.h"]
+    body:str = """
+    // Zero-checked division
+    
+    return y != 0.0 ? x / y : 0.0;
+    """
+    docstring:str="""
+    Return (x / y) or 0.0 if y is zero.
+    """
 
 class CMathTranspiler(ast.NodeVisitor):
     """
@@ -43,17 +184,36 @@ class CMathTranspiler(ast.NodeVisitor):
     }
 
     # Whitelist of allowed C math funcs and expected argument counts
-    MATH_FUNCS:dict[str,int] = {
-        "sin": 1, "cos": 1, "tan": 1, 
-        "exp": 1, "log": 1, "log10": 1, "sqrt": 1, "fabs": 1, "abs": 1,
-        "ceil": 1, "floor": 1, "round": 1,
-        "pow": 2, "fmin": 2, "fmax": 2
+    MATH_FUNCS:dict[str, tuple[int, str, list[str]]] = {
+        "sin": (1, "Returns the sine of the input (radians)", ["math.h"]), 
+        "cos": (1, "Returns the cosine of the input (radians)", ["math.h"]), 
+        "tan": (1, "Returns the tangent of the input (radians)", ["math.h"]), 
+        "exp": (1, "Returns Euler's number raised to the input power", ["math.h"]), 
+        "log": (1, "Returns the natural logarithm of the input", ["math.h"]), 
+        "log10": (1, "Returns the base-10 logarithm of the input", ["math.h"]), 
+        "sqrt": (1, "Returns the square root of the input", ["math.h"]), 
+        "fabs": (1, "Returns the absolute value of the input. Same as abs()", ["math.h"]),
+        "abs": (1, "Returns the absolute value of the input. Same as fabs()", ["math.h"]),
+        "ceil": (1, "Returns the ceiling-rounded value of the input", ["math.h"]), 
+        "floor": (1, "Returns the floor-rounded value of the input", ["math.h"]), 
+        "round": (1, "Returns the half-up-rounded value fo the input", ["math.h"]),
+        "pow": (2, "Returns the x to the y power", ["math.h"]), 
+        "fmin": (2, "Returns the minimum of x and y", ["math.h"]), 
+        "fmax": (2, "Returns the maximum of x and y", ["math.h"])
     }
 
-    CONSTANTS:dict[str,str] = {
+    CONSTANTS:dict[str, str] = {
         "pi": "3.14159265",
         "tau": "6.28318531",
         "e": "2.71828182"
+    }
+
+    # Third party C function names and binds
+    FUNCTIONS:dict[str, type[Function]] = {
+        "PID" : PID,
+        "elapsed" : elapsed,
+        "time_delta" : time_delta,
+        "_safe_divide" : _safe_divide
     }
 
     def __init__(self, phys_map: dict[str, int], virt_map: dict[str, int]):
@@ -67,7 +227,10 @@ class CMathTranspiler(ast.NodeVisitor):
         self.virt_map = virt_map
         
         # Placeholder for future use
-        self.dependencies: set[str] = set()
+        self.channel_deps: set[str] = set()
+        self.function_deps: set[str] = set()
+        self.builtin_deps: set[str] = set()
+        self.tr_idx: int = 0
 
     def transpile(self, expr_str: str) -> tuple[str, set[str]]:
         """Transpile a string and return the result and its dependencies
@@ -82,21 +245,20 @@ class CMathTranspiler(ast.NodeVisitor):
         logger.info(f"Transpiling string \"{expr_str}\"")
         
         try:
-            # Reset placeholder
-            self.dependencies.clear()
+            # Reset placeholders
+            self.channel_deps.clear()
             
             # Parse and translate
             tree = ast.parse(expr_str, mode="eval")
             c_expr = self.visit(tree.body)
             
-            return c_expr, set(self.dependencies)
+            return c_expr, set(self.channel_deps)
         except ValueError as e:
             logger.error(f"Invalid name: {e}")
         except Exception as e:
             logger.error(f"General exception: {e}")
         
         return "", set()
-        
 
     def visit_Constant(self, node: ast.Constant) -> str:
         """Visit a constant and force any number to a double literal
@@ -134,7 +296,7 @@ class CMathTranspiler(ast.NodeVisitor):
         if node.id in self.phys_map:
             return f"phys[{self.phys_map[node.id]}]"
         if node.id in self.virt_map:
-            self.dependencies.add(node.id)
+            self.channel_deps.add(node.id)
             return f"virt[{self.virt_map[node.id]}]"
         raise ValueError(f"Unknown channel or identifier: '{node.id}'")
 
@@ -157,6 +319,10 @@ class CMathTranspiler(ast.NodeVisitor):
 
         # Exponents and float modulo translate to C functions
         if op_type in (ast.Pow, ast.Mod):
+            
+            # Add to get math.h
+            self.builtin_deps.add("pow")
+            
             return f"{op_str}({left}, {right})"
         
         # Guard against division by zero to prevent NaN/Inf propagation in RT loop
@@ -165,6 +331,8 @@ class CMathTranspiler(ast.NodeVisitor):
             if isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant):
                 
                 # Left and right are constants or names, static eval
+                if float(right) == 0.0:
+                    return f"0.0"
                 return f"{float(left) / float(right)}"
             
             elif isinstance(node.right, ast.Constant):
@@ -176,24 +344,49 @@ class CMathTranspiler(ast.NodeVisitor):
                     raise ZeroDivisionError(f"Denominator statically evaluates to zero: {left} / {right}")
             
             # Guard is necessary
-            return f"(({right}) != 0.0 ? ({left}) / ({right}) : 0.0)"
+            self.function_deps.add("_safe_divide")
+            return f"_safe_divide({left}, {right})"
 
         return f"({left} {op_str} {right})"
 
     def visit_Call(self, node: ast.Call) -> str:
+        
         if not isinstance(node.func, ast.Name):
             raise ValueError("Only direct function calls are allowed.")
-        func_name = node.func.id
-        if func_name not in self.MATH_FUNCS:
-            raise ValueError(f"Unsupported function: '{func_name}()'")
         
-        expected_args = self.MATH_FUNCS[func_name]
-        if len(node.args) != expected_args:
-            raise ValueError(f"'{func_name}()' expects {expected_args} args, got {len(node.args)}")
+        func_name = node.func.id
+        args_raw = [str(self.visit(arg)) for arg in node.args]
+        
+        if func_name in self.MATH_FUNCS:
+            expected_args = self.MATH_FUNCS[func_name][0]
+            if len(node.args) != expected_args:
+                raise ValueError(f"'{func_name}()' expects {expected_args} args, got {len(node.args)}")
 
-        c_func = "fabs" if func_name == "abs" else func_name
-        args = ", ".join(self.visit(arg) for arg in node.args)
-        return f"{c_func}({args})"
+            c_func = "fabs" if func_name == "abs" else func_name
+            self.builtin_deps.add(func_name)
+            
+            return f"{c_func}({", ".join(args_raw)})"
+        
+        elif func_name in self.FUNCTIONS:
+            
+            func = self.FUNCTIONS[func_name]()
+             
+            if len(node.args) != func.fixed_registers:
+                return f"0.0 /* Invalid arguments! Expected: {func.signature_py}, received {len(node.args)} arguments: {", ".join(args_raw)} */"
+            
+            args:list[str] = [arg for arg in args_raw]
+            
+            for _ in range(func.transient_registers):
+                args.append(f"&trans[{self.tr_idx}]")
+                self.tr_idx += 1
+            
+            self.function_deps.add(func_name)
+            
+            return f"{func_name}({", ".join(args)})"
+        
+        else: 
+            
+            raise ValueError(f"Unsupported function: '{func_name}()'")
 
     def visit_Compare(self, node: ast.Compare) -> str:
         if len(node.ops) != 1 or len(node.comparators) != 1:
@@ -220,8 +413,16 @@ class CMathTranspiler(ast.NodeVisitor):
     def generic_visit(self, node: ast.AST):
         raise ValueError(f"Disallowed syntax in expression: {type(node).__name__}")
 
+def get_functions() -> list[str]:
+    transpiler = CMathTranspiler({}, {})
+    math_funcs = [f"{func_name}({", ".join([_GENERIC_ARGS[i] for i in range(func_args[0])])})\n  {func_args[1]}"
+                  for func_name, func_args in transpiler.MATH_FUNCS.items()]
+    cust_funcs = [f"{func().signature_py}\n{func().docs}"
+                  for func in transpiler.FUNCTIONS.values()]
+    return math_funcs + cust_funcs
 
-def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_formulas: list[str], tab_spaces: int=0) -> str:
+def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_formulas: list[str], tab_spaces: int=0) -> tuple[str, int]:
+    # I think this can't return a tuple for LV but we will see
     phys_map = {name: i for i, name in enumerate(phys_channels)}
     virt_map = {name: i for i, name in enumerate(virt_labels)}
 
@@ -243,11 +444,31 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
     except CycleError as e:
         raise ValueError(f"Circular dependency detected in virtual channels: {e}")
 
+    # Get header deps
+    header_deps:set[str] = set()
+    for dep in transpiler.builtin_deps:
+        for a in transpiler.MATH_FUNCS[dep][2]:
+            header_deps.add(a)
+    for dep in transpiler.function_deps:
+        for a in transpiler.FUNCTIONS[dep]().header_dependencies:
+            header_deps.add(a)
+    
     lines = [
         f"// Generated by main.py ({Path().resolve()}, {datetime.now()})\n",
-        "#include <math.h>\n",
-        "void evaluate_channels (const double* __restrict__ phys, double* __restrict__ virt) {\n"
-    ]
+        *[f"#include <{x}>" for x in header_deps], ""]
+
+    if transpiler.function_deps:
+        lines.extend([
+            f"// Generated dependencies\n",
+            *[str(transpiler.FUNCTIONS[func]())+"\n" for func in transpiler.function_deps],
+            "// End generated dependencies\n"
+        ])
+    
+    # Signature: void evaluate_channels(double* phys, double* virt, double* trans)
+        # double* phys: physical channel array (read)
+        # double* virt: virtual channel array (write)
+        # double* trans: transient data to carry data from previous frames
+    lines.append("void evaluate_channels (const double* __restrict__ phys, double* __restrict__ virt, double* __restrict__ trans) {\n")
     if len(execution_order) > 0:
         lines.extend([
             f"\t// {v_name} = {virt_formulas[virt_labels.index(v_name)]}"
@@ -260,4 +481,4 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
     lines.extend(["}", "", "// End of generated code"])
     if tab_spaces > 0:
         lines = [line.replace('\t', ' ' * tab_spaces) for line in lines]
-    return "\n".join(lines)
+    return ("\n".join(lines), transpiler.tr_idx)
