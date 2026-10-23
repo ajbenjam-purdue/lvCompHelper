@@ -89,7 +89,7 @@ class PID(Function):
     *acc_err += p_err;            // Integral error
     *last_pv = pv;                // Proc var
     
-    double cmd = *init * (gain_p * p_err + gain_d * d_err + gain_i * *acc_err);
+    double cmd = gain_p * p_err + *init * (gain_d * d_err + gain_i * *acc_err);
     *init = 1.0;
     
     return cmd;
@@ -120,12 +120,9 @@ class PIDa(Function):
     if (fabs(p_err) <= wu_err) {
         *acc_err += p_err; // Integral error
     }
-    else {
-        *acc_err = 0;
-    }
     *last_pv = pv; // Proc var
     
-    double cmd = *init * (gain_p * p_err + gain_d * d_err + gain_i * *acc_err);
+    double cmd = gain_p * p_err + *init * (gain_d * d_err + gain_i * *acc_err);
     *init = 1.0;
     
     // Limit output
