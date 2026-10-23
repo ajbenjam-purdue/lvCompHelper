@@ -488,7 +488,7 @@ class CMathTranspiler(ast.NodeVisitor):
 
 def _produce_c_return_func(name:str, ret:int, tab_spaces:int=0) -> str:
     tab_char = " " * tab_spaces if tab_spaces > 0 else "\t"
-    return f"""int {name}() {{
+    return f"""#define LVCH_{name.upper()} {ret}\n\nint {name}() {{
 {tab_char}return {ret};
 }}"""
 
