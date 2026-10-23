@@ -496,9 +496,38 @@ class CMathTranspiler(ast.NodeVisitor):
 
 def _produce_c_return_func(name:str, ret:int, tab_spaces:int=0) -> str:
     tab_char = " " * tab_spaces if tab_spaces > 0 else "\t"
+    
     return f"""#define LVCH_{name.upper()} {ret}\n\nint {name}() {{
 {tab_char}return {ret};
 }}"""
+
+def _produce_c_printout_func(tab_spaces:int=0, phys_reg:list[str]=[], virt_reg:list[str]=[], tr_reg:list[str]=[]) -> str:
+    tab_char = " " * tab_spaces if tab_spaces > 0 else "\t"
+    
+    res = f"""// Debugging
+
+#include <stdio.h>
+
+static void print_registers(double* phys, double* virt, double* trans) {{
+"""
+    if len(phys_reg) > 0:
+        res += f"{tab_char}printf(\"Physical registers\\n  {"\\n  ".join([f'{n}=%.6f' for n in phys_reg])}\\n\","\
+               f" {', '.join([f"phys[{i}]" for i, _ in enumerate(phys_reg)])});\n"
+    else:
+        res += f"{tab_char}printf(\"No physical registers present\");\n"
+    if len(virt_reg) > 0:
+        res += f"{tab_char}printf(\"Virtual registers\\n  {"\\n  ".join([f'{n}=%.6f' for n in virt_reg])}\\n\","\
+               f" {', '.join([f"virt[{i}]" for i, _ in enumerate(virt_reg)])});\n"
+    else:
+        res += f"{tab_char}printf(\"No virtual registers present\");\n"
+    if len(tr_reg) > 0:
+        res += f"{tab_char}printf(\"Transient registers\\n  {"\\n  ".join([f'{n}=%.6f' for n in tr_reg])}\\n\","\
+               f" {', '.join([f"trans[{i}]" for i, _ in enumerate(tr_reg)])});\n"
+    else:
+        res += f"{tab_char}printf(\"No transient registers present\");\n"
+
+    return res+"}\n"
+
 
 def get_functions() -> list[str]:
     transpiler = CMathTranspiler({}, {})
@@ -584,6 +613,9 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
                       ("get_virtual_register_count", min(len(virt_labels), len(virt_formulas))),
                       ("get_transient_register_count", transpiler.tr_idx)
                   ]] + ["// End registers\n"])
+    
+    # Debug print tool
+    lines.append(_produce_c_printout_func(tab_spaces, phys_channels, virt_labels, transpiler.transient_channels))
     
     # Signature: void evaluate_channels(double* phys, double* virt, double* trans)
         # double* phys: physical channel array (read)
