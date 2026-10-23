@@ -207,7 +207,7 @@ int main() {
 
     // Evaluate
     for (size_t i = 0; i < LVCH_TRIALS; i++) {
-        printf("\nTrial %zu / %d\n", i+1, LVCH_TRIALS);
+        printf("Trial %zu / %d\n", i+1, LVCH_TRIALS);
         evaluate_channels(physical_values, virtual_values, transient_registers);
         // print_registers(physical_values, virtual_values, transient_registers);
     }
