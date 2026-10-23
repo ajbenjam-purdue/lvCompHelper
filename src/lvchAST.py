@@ -1,18 +1,17 @@
-import ast
-
 from pathlib import Path
 from datetime import datetime
 from graphlib import TopologicalSorter, CycleError
 from typing import Callable, Any
+from time import perf_counter_ns
 from abc import ABC
-import math
+import math, ftplib, ast
 
 import logging
 
 logger = logging.getLogger(__name__)
 
-_GENERIC_ARGS = ['x', 'y', 'z', 'a', 'b', 'c']
 
+# Function classes
 class Function(ABC):
     """Parent class for functions
     
@@ -252,8 +251,7 @@ class Delta(Function):
     x: The variable to delta
     """
     
-
-class _safe_divide(Function):
+class _safe_divide(Function): # type: ignore
     name:str = "_safe_divide"
     args_py:list[str] = ["x", "y"]
     args_tr:list[str] = []
@@ -267,6 +265,8 @@ class _safe_divide(Function):
     Return (x / y) or 0.0 if y is zero.
     """
 
+
+# Transpiler Class
 class CMathTranspiler(ast.NodeVisitor):
     """
     Walks a Python expression AST and emits C
@@ -319,6 +319,9 @@ class CMathTranspiler(ast.NodeVisitor):
         "fmin": (2, "Returns the minimum of x and y", ["math.h"], min), 
         "fmax": (2, "Returns the maximum of x and y", ["math.h"], max)
     }
+    
+    # Corresponding generic arguments for above functions
+    GENERIC_ARGS = ['x', 'y', 'z', 'a', 'b', 'c']
 
     CONSTANTS:dict[str, str] = {
         "pi": "3.14159265",
@@ -536,12 +539,19 @@ class CMathTranspiler(ast.NodeVisitor):
     def generic_visit(self, node: ast.AST):
         raise ValueError(f"Disallowed syntax in expression: {type(node).__name__}")
 
-def _produce_c_return_func(name:str, ret:int, tab_spaces:int=0) -> str:
-    tab_char = " " * tab_spaces if tab_spaces > 0 else "\t"
+
+# Internal Methods
+def _produce_c_return_funcs(phys_channels:list[str], virt_labels:list[str], virt_formulas:list[str], idx:int, debug:bool, tab_spaces:int) -> list[str]:
+    def _produce_c_return_func(name:str, ret:int, enable_def_line:bool, tab_spaces:int=0) -> str:
+        tab_char = " " * tab_spaces if tab_spaces > 0 else "\t"
     
-    return f"""#define LVCH_{name.upper()} {ret}\n\nint {name}() {{
-{tab_char}return {ret};
-}}"""
+        return f"{f"#define LVCH_{name.upper()} {ret}\n\n" if enable_def_line else ""}int {name}() {{\n{tab_char}return {ret};\n}}"
+    
+    return [_produce_c_return_func(name, ret, debug, tab_spaces) for name, ret in [
+                      ("get_physical_register_count", len(phys_channels)), 
+                      ("get_virtual_register_count", min(len(virt_labels), len(virt_formulas))),
+                      ("get_transient_register_count", idx)
+                  ]]
 
 def _produce_c_printout_func(tab_spaces:int=0, phys_reg:list[str]=[], virt_reg:list[str]=[], tr_reg:list[str]=[]) -> str:
     tab_char = " " * tab_spaces if tab_spaces > 0 else "\t"
@@ -575,7 +585,7 @@ def get_functions() -> list[str]:
     transpiler = CMathTranspiler({}, {})
     
     # Get all funcs
-    math_funcs = [f"{func_name}({", ".join([_GENERIC_ARGS[i] for i in range(func_args[0])])})\n  {func_args[1]}"
+    math_funcs = [f"{func_name}({", ".join([transpiler.GENERIC_ARGS[i] for i in range(func_args[0])])})\n  {func_args[1]}"
                   for func_name, func_args in transpiler.MATH_FUNCS.items()]
     cust_funcs = [f"{func().signature_py}\n{func().docs}"
                   for func in transpiler.FUNCTIONS.values()]
@@ -583,8 +593,24 @@ def get_functions() -> list[str]:
     # Show only ext funcs
     return [x for x in math_funcs + cust_funcs if not x.startswith("_")]
 
-def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_formulas: list[str], tab_spaces: int=0) -> str:
-    # This does not NEED to return a tuple
+def generate_c_library(phys_channels:list[str], virt_labels:list[str], virt_formulas:list[str], tab_spaces:int=0, debug:bool=False) -> str:
+    """Transpiles a list of physical channel names, virtual channel names, and virtual channel formulas
+    into a plain text C file to be compiled for an RTOS Linux device. Labels must follow python naming conventions.
+    If a circular dependency is found, the text returned will contain the error message and an empty `evaluate_channels()`
+    function.
+
+    Args:
+        phys_channels (list[str]): The list of plaintext physical channel labels matching the order of the task creation in DAQmx.
+        virt_labels (list[str]): The list of plaintext virtual channel labels.
+        virt_formulas (list[str]): The list of plaintext virtual formulas corresponding to `virt_labels`.
+        tab_spaces (int, optional): The number of spaces to use instead of a tab. If 0, retains tabs as the whitespace. Defaults to 0.
+        debug (bool, optional): Enable extra debug printouts. Defaults to False.
+
+    Returns:
+        str: The resulting C code
+    """
+    time_start:int = perf_counter_ns()
+    
     phys_map = {name: i for i, name in enumerate(phys_channels)}
     virt_map = {name: i for i, name in enumerate(virt_labels)}
 
@@ -604,68 +630,74 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
         sorter = TopologicalSorter(graph)
         execution_order = list(sorter.static_order())
     except CycleError as e:
-        raise ValueError(f"Circular dependency detected in virtual channels: {e}")
-
+        logger.error(f"Detected circular dependency: {e}")
+        return f"""
+// No code generated! Error: {e}
+{"\n".join(_produce_c_return_funcs(phys_channels, virt_labels, virt_formulas, transpiler.tr_idx, debug, tab_spaces))}
+void evaluate_channels (const double* phys, double* virt, double* trans) {{}}
+"""
+    
     # Get header deps
     header_deps:set[str] = set()
     dep:str|None = None
+    
+    def _get_dependency(a:str) -> str|None:
+        if a.strip().endswith('.h'):
+            return f"#include <{a}>"
+        elif len(a.strip().split()) == 2:
+            name, val = a.strip().split()
+            return f"#ifndef {name}\n#define {name} {val}\n#endif"
+        else:
+            return None
+        
+    def _add_dependency(a:str|None, deps:set[str]) -> None:
+        if not a: return
+        if a not in deps:
+            logger.info(f"Adding dependency: {a.split('\n')[0]}{"..." if len(a.split('\n')) > 1 else ""}")
+        deps.add(a)
+        
     for dep in transpiler.builtin_deps:
         for a in transpiler.MATH_FUNCS[dep][2]:
-            if a.strip().endswith('.h'):
-                dep = f"#include <{a}>"
-            elif len(a.strip().split()) == 2:
-                name, val = a.strip().split()
-                dep = f"#ifndef {name}\n#define {name} {val}\n#endif"
-            else:
-                dep = None
-            
-            if dep:
-                if dep not in header_deps:
-                    logger.info(f"Adding dependency: {dep.split('\n')[0]}{"..." if len(dep.split('\n')) > 1 else ""}")
-                header_deps.add(dep)
+            dep = _get_dependency(a)
+            _add_dependency(dep, header_deps)
+                
     for dep in transpiler.function_deps:
         for a in transpiler.FUNCTIONS[dep]().header_dependencies:
-            if a.strip().endswith('.h'):
-                dep = f"#include <{a}>"
-            elif len(a.strip().split()) == 2:
-                name, val = a.strip().split()
-                dep = f"#ifndef {name}\n#define {name} {val}\n#endif"
-            else:
-                dep = None
-            
-            if dep:
-                if dep not in header_deps:
-                    logger.info(f"Adding dependency: {dep.split('\n')[0]}{"..." if len(dep.split('\n')) > 1 else ""}")
-                header_deps.add(dep)
+            dep = _get_dependency(a)
+            _add_dependency(dep, header_deps)
     
+    
+    # Generate header, includes, and ifndefs
     lines = [
-        f"// Generated by main.py ({Path().resolve()}, {datetime.now()})\n",
+        f"// Generated by main.py ({Path().resolve()}, {datetime.now()})\n{"// Transpiled in debug mode\n" if debug else ""}",
         *[f"{x}" for x in header_deps if not x.startswith('#include')], "", 
-        *[f"{x}" for x in header_deps if x.startswith('#include')], ""]
+        *[f"{x}" for x in header_deps if x.startswith('#include')], ""
+    ]
 
+    # Generate function dependencies
     if transpiler.function_deps:
         lines.extend([
-            f"// Generated dependencies\n",
+            f"// Generated dependencies", "",
             *[str(transpiler.FUNCTIONS[func]())+"\n" for func in transpiler.function_deps],
-            "// End generated dependencies\n"
+            "// End generated dependencies", ""
         ])
     
     # Register getters and macros
-    lines.extend(["// Registers\n"] + [_produce_c_return_func(name, ret, tab_spaces)+"\n"
-                  for name, ret in [
-                      ("get_physical_register_count", len(phys_channels)), 
-                      ("get_virtual_register_count", min(len(virt_labels), len(virt_formulas))),
-                      ("get_transient_register_count", transpiler.tr_idx)
-                  ]] + ["// End registers\n"])
+    lines.extend(["// Registers", ""] + 
+                 _produce_c_return_funcs(phys_channels, virt_labels, virt_formulas, transpiler.tr_idx, debug, tab_spaces) + 
+                 ["// End registers", ""])
     
     # Debug print tool
-    lines.append(_produce_c_printout_func(tab_spaces, phys_channels, virt_labels, transpiler.transient_channels))
+    if debug: lines.append(_produce_c_printout_func(tab_spaces, phys_channels, virt_labels, transpiler.transient_channels))
     
-    # Signature: void evaluate_channels(double* phys, double* virt, double* trans)
+    # Signature: int evaluate_channels(double* phys, double* virt, double* trans)
         # double* phys: physical channel array (read)
         # double* virt: virtual channel array (write)
         # double* trans: transient data to carry data from previous frames
-    lines.append("void evaluate_channels (const double* phys, double* virt, double* trans) {\n")
+        # int return: error code
+    lines.append("int evaluate_channels (const double* phys, double* virt, double* trans) {\n")
+    if debug:
+        lines.append("\tif (!phys || !virt || !trans) { return 1; }\n")
     if len(execution_order) > 0:
         lines.extend([
             f"\t// {v_name} = {virt_formulas[virt_labels.index(v_name)]}"
@@ -675,7 +707,9 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
         ])
     else:
         lines.append("\t// No inputs provided\n")
-    lines.extend(["}", "", "// End of generated code"])
+    lines.extend(["\treturn 0;", "}", "", "// End of generated code"])
     if tab_spaces > 0:
         lines = [line.replace('\t', ' ' * tab_spaces) for line in lines]
+    
+    logger.info(f"Successfully transpiled ({(perf_counter_ns() - time_start) * 1E-6:.2f}ms)")
     return "\n".join(lines)
