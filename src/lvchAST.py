@@ -150,7 +150,7 @@ class EMA(Function):
     
     double result = *init == 0.0 ? x : alpha * x + (1 - alpha) * *x_0;
     
-    *x_0 = x;
+    *x_0 = result;
     *init = 1.0;
     
     // Filter value
@@ -171,9 +171,9 @@ class Slew_Limiter(Function):
     // Slew limiter
     
     double err = *init * (pv - *pv_0);
-    double result = *pv_0 + fmin(fmax(err, rate), -rate);
+    double result = *pv_0 + fmin(fmax(err, -rate), rate);
     
-    *pv_0 = pv;
+    *pv_0 = result;
     *init = 1.0;
     
     // Limit the slew
