@@ -165,6 +165,29 @@ class EMA(Function):
     alpha: the smoothing factor, where 1 corresponds to no filter (direct) and approaching 0 reduces the system's response
     """
 
+class Slew_Limiter(Function):
+    name:str = "slew_limit"
+    args_py:list[str] = ["pv", "rate"]
+    args_tr:list[str] = ["pv_0", "init"]
+    header_dependencies:list[str] = []
+    body:str = """
+    // Slew limiter
+    
+    double err = *init * (pv - *pv_0);
+    double result = *pv_0 + fmin(fmax(err, rate), -rate);
+    
+    *pv_0 = pv;
+    *init = 1.0;
+    
+    // Limit the slew
+    return result;
+    """
+    docstring:str = """
+    Create a slew limiter for a variable, which keeps an internal register and limits the change per tick to rate
+    pv: the process variable to limit
+    rate: maximum possible change per tick, up or down. should be positive
+    """
+
 class Elapsed(Function):
     name:str = "elapsed"
     args_py:list[str] = []
@@ -607,6 +630,7 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
             "// End generated dependencies\n"
         ])
     
+    # Register getters and macros
     lines.extend(["// Registers\n"] + [_produce_c_return_func(name, ret, tab_spaces)+"\n"
                   for name, ret in [
                       ("get_physical_register_count", len(phys_channels)), 
