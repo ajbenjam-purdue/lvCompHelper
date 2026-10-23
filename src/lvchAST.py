@@ -78,7 +78,7 @@ class Dummy(Function):
 class PID(Function):
     name:str = "PID"
     args_py:list[str] = ["pv", "sp", "gain_p", "gain_d", "gain_i"]
-    args_tr:list[str] = ["last_pv", "acc_err"]
+    args_tr:list[str] = ["last_pv", "acc_err", "init"]
     header_dependencies:list[str] = ["math.h"]
     body:str = """
     // PID Controller
@@ -89,7 +89,10 @@ class PID(Function):
     *acc_err += p_err;            // Integral error
     *last_pv = pv;                // Proc var
     
-    return gain_p * p_err + gain_d * d_err + gain_i * *acc_err;
+    double cmd = gain_p * p_err + *init * (gain_d * d_err + gain_i * *acc_err);
+    *init = 1.0;
+    
+    return cmd;
     """
     docstring:str = """
     Create a transient PID controller following gain logic.
@@ -101,9 +104,9 @@ class PID(Function):
     """
 
 class PIDa(Function):
-    name:str = "PID"
+    name:str = "PIDa"
     args_py:list[str] = ["pv", "sp", "gain_p", "gain_d", "gain_i", "wu_err", "out_lo", "out_hi"]
-    args_tr:list[str] = ["last_pv", "acc_err"]
+    args_tr:list[str] = ["last_pv", "acc_err", "init"]
     header_dependencies:list[str] = ["math.h"]
     body:str = """
     // Advanced PID Controller
@@ -117,12 +120,10 @@ class PIDa(Function):
     if (fabs(p_err) <= wu_err) {
         *acc_err += p_err; // Integral error
     }
-    else {
-        *acc_err = 0;
-    }
     *last_pv = pv; // Proc var
     
-    double cmd = gain_p * p_err + gain_d * d_err + gain_i * *acc_err;
+    double cmd = gain_p * p_err + *init * (gain_d * d_err + gain_i * *acc_err);
+    *init = 1.0;
     
     // Limit output
     return fmin(out_hi, fmax(cmd, out_lo));
@@ -139,11 +140,56 @@ class PIDa(Function):
     out_hi: output limit high
     """
 
+class EMA(Function):
+    name:str = "EMA"
+    args_py:list[str] = ["x", "alpha"]
+    args_tr:list[str] = ["x_0", "init"]
+    header_dependencies:list[str] = []
+    body:str = """
+    // Exponential moving average
+    
+    double result = *init == 0.0 ? x : alpha * x + (1 - alpha) * *x_0;
+    
+    *x_0 = result;
+    *init = 1.0;
+    
+    // Filter value
+    return result;
+    """
+    docstring:str = """
+    Create an exponential moving average filter with smoothing factor alpha
+    x: the process variable to smooth
+    alpha: the smoothing factor, where 1 corresponds to no filter (direct) and approaching 0 reduces the system's response
+    """
+
+class Slew_Limiter(Function):
+    name:str = "slew_limit"
+    args_py:list[str] = ["pv", "rate"]
+    args_tr:list[str] = ["pv_0", "init"]
+    header_dependencies:list[str] = []
+    body:str = """
+    // Slew limiter
+    
+    double err = *init * (pv - *pv_0);
+    double result = *pv_0 + fmin(fmax(err, -rate), rate);
+    
+    *pv_0 = result;
+    *init = 1.0;
+    
+    // Limit the slew
+    return result;
+    """
+    docstring:str = """
+    Create a slew limiter for a variable, which keeps an internal register and limits the change per tick to rate
+    pv: the process variable to limit
+    rate: maximum possible change per tick, up or down. should be positive
+    """
+
 class Elapsed(Function):
     name:str = "elapsed"
     args_py:list[str] = []
     args_tr:list[str] = ["start_s", "start_ns"]
-    header_dependencies:list[str] = ["time.h"]
+    header_dependencies:list[str] = ["time.h", "_POSIX_C_SOURCE 199309L"]
     body:str = """
     // Elapsed time in seconds
     
@@ -163,11 +209,11 @@ class Elapsed(Function):
     Return the elapsed time from the start of the logging in seconds.
     """
 
-class Time_delta(Function):
+class Time_Delta(Function):
     name:str = "time_delta"
     args_py:list[str] = []
     args_tr:list[str] = ["prev_s", "prev_ns"]
-    header_dependencies:list[str] = ["time.h"]
+    header_dependencies:list[str] = ["time.h", "_POSIX_C_SOURCE 199309L"]
     body:str = """
     // Elapsed time in seconds
     
@@ -189,6 +235,23 @@ class Time_delta(Function):
     docstring:str = """
     Return the elapsed time from the start of the logging in seconds (or zero on startup).
     """
+
+class Delta(Function):
+    name:str = "delta"
+    args_py:list[str] = ["x"]
+    args_tr:list[str] = ["x_0"]
+    header_dependencies:list[str] = []
+    body:str = """
+    // Difference between current tick and last
+    double result = x - *x_0;
+    *x_0 = x; // Previous value is current
+    return result;
+    """ 
+    docstring:str = """
+    Return the difference between the variable in the current iteration and the variable in the previous iteration
+    x: The variable to delta
+    """
+    
 
 class _safe_divide(Function):
     name:str = "_safe_divide"
@@ -264,14 +327,7 @@ class CMathTranspiler(ast.NodeVisitor):
     }
 
     # Third party C function names and binds
-    FUNCTIONS:dict[str, type[Function]] = {
-        "dummy" : Dummy,
-        "pid" : PID,
-        "pida" : PIDa,
-        "elapsed" : Elapsed,
-        "time_delta" : Time_delta,
-        "_safe_divide" : _safe_divide
-    }
+    FUNCTIONS:dict[str, type[Function]] = {x.name : x for x in Function.__subclasses__()}
 
     def __init__(self, phys_map: dict[str, int], virt_map: dict[str, int]):
         """Create Transpiler object with the provided maps
@@ -288,6 +344,7 @@ class CMathTranspiler(ast.NodeVisitor):
         self.function_deps: set[str] = set()
         self.builtin_deps: set[str] = set()
         self.tr_idx: int = 0
+        self.transient_channels:list[str] = []
 
     def transpile(self, expr_str: str) -> tuple[str, set[str], str]:
         """Transpile a string and return the result and its dependencies
@@ -441,8 +498,9 @@ class CMathTranspiler(ast.NodeVisitor):
             
             args:list[str] = [arg for arg in args_raw]
             
-            for _ in range(func.transient_registers):
+            for i in range(func.transient_registers):
                 args.append(f"&trans[{self.tr_idx}]")
+                self.transient_channels.append(f'{func.name}:{func.args_tr[i]}')
                 self.tr_idx += 1
             
             self.function_deps.add(func_name)
@@ -478,6 +536,41 @@ class CMathTranspiler(ast.NodeVisitor):
     def generic_visit(self, node: ast.AST):
         raise ValueError(f"Disallowed syntax in expression: {type(node).__name__}")
 
+def _produce_c_return_func(name:str, ret:int, tab_spaces:int=0) -> str:
+    tab_char = " " * tab_spaces if tab_spaces > 0 else "\t"
+    
+    return f"""#define LVCH_{name.upper()} {ret}\n\nint {name}() {{
+{tab_char}return {ret};
+}}"""
+
+def _produce_c_printout_func(tab_spaces:int=0, phys_reg:list[str]=[], virt_reg:list[str]=[], tr_reg:list[str]=[]) -> str:
+    tab_char = " " * tab_spaces if tab_spaces > 0 else "\t"
+    
+    res = f"""// Debugging
+
+#include <stdio.h>
+
+static void print_registers(double* phys, double* virt, double* trans) {{
+"""
+    if len(phys_reg) > 0:
+        res += f"{tab_char}printf(\"Physical registers\\n  {"\\n  ".join([f'{n}=%.6f' for n in phys_reg])}\\n\","\
+               f" {', '.join([f"phys[{i}]" for i, _ in enumerate(phys_reg)])});\n"
+    else:
+        res += f"{tab_char}printf(\"No physical registers present\");\n"
+    if len(virt_reg) > 0:
+        res += f"{tab_char}printf(\"Virtual registers\\n  {"\\n  ".join([f'{n}=%.6f' for n in virt_reg])}\\n\","\
+               f" {', '.join([f"virt[{i}]" for i, _ in enumerate(virt_reg)])});\n"
+    else:
+        res += f"{tab_char}printf(\"No virtual registers present\");\n"
+    if len(tr_reg) > 0:
+        res += f"{tab_char}printf(\"Transient registers\\n  {"\\n  ".join([f'{n}=%.6f' for n in tr_reg])}\\n\","\
+               f" {', '.join([f"trans[{i}]" for i, _ in enumerate(tr_reg)])});\n"
+    else:
+        res += f"{tab_char}printf(\"No transient registers present\");\n"
+
+    return res+"}\n"
+
+
 def get_functions() -> list[str]:
     transpiler = CMathTranspiler({}, {})
     
@@ -490,8 +583,8 @@ def get_functions() -> list[str]:
     # Show only ext funcs
     return [x for x in math_funcs + cust_funcs if not x.startswith("_")]
 
-def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_formulas: list[str], tab_spaces: int=0) -> tuple[str, int]:
-    # This CAN return a tuple!
+def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_formulas: list[str], tab_spaces: int=0) -> str:
+    # This does not NEED to return a tuple
     phys_map = {name: i for i, name in enumerate(phys_channels)}
     virt_map = {name: i for i, name in enumerate(virt_labels)}
 
@@ -515,16 +608,40 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
 
     # Get header deps
     header_deps:set[str] = set()
+    dep:str|None = None
     for dep in transpiler.builtin_deps:
         for a in transpiler.MATH_FUNCS[dep][2]:
-            header_deps.add(a)
+            if a.strip().endswith('.h'):
+                dep = f"#include <{a}>"
+            elif len(a.strip().split()) == 2:
+                name, val = a.strip().split()
+                dep = f"#ifndef {name}\n#define {name} {val}\n#endif"
+            else:
+                dep = None
+            
+            if dep:
+                if dep not in header_deps:
+                    logger.info(f"Adding dependency: {dep.split('\n')[0]}{"..." if len(dep.split('\n')) > 1 else ""}")
+                header_deps.add(dep)
     for dep in transpiler.function_deps:
         for a in transpiler.FUNCTIONS[dep]().header_dependencies:
-            header_deps.add(a)
+            if a.strip().endswith('.h'):
+                dep = f"#include <{a}>"
+            elif len(a.strip().split()) == 2:
+                name, val = a.strip().split()
+                dep = f"#ifndef {name}\n#define {name} {val}\n#endif"
+            else:
+                dep = None
+            
+            if dep:
+                if dep not in header_deps:
+                    logger.info(f"Adding dependency: {dep.split('\n')[0]}{"..." if len(dep.split('\n')) > 1 else ""}")
+                header_deps.add(dep)
     
     lines = [
         f"// Generated by main.py ({Path().resolve()}, {datetime.now()})\n",
-        *[f"#include <{x}>" for x in header_deps], ""]
+        *[f"{x}" for x in header_deps if not x.startswith('#include')], "", 
+        *[f"{x}" for x in header_deps if x.startswith('#include')], ""]
 
     if transpiler.function_deps:
         lines.extend([
@@ -532,6 +649,17 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
             *[str(transpiler.FUNCTIONS[func]())+"\n" for func in transpiler.function_deps],
             "// End generated dependencies\n"
         ])
+    
+    # Register getters and macros
+    lines.extend(["// Registers\n"] + [_produce_c_return_func(name, ret, tab_spaces)+"\n"
+                  for name, ret in [
+                      ("get_physical_register_count", len(phys_channels)), 
+                      ("get_virtual_register_count", min(len(virt_labels), len(virt_formulas))),
+                      ("get_transient_register_count", transpiler.tr_idx)
+                  ]] + ["// End registers\n"])
+    
+    # Debug print tool
+    lines.append(_produce_c_printout_func(tab_spaces, phys_channels, virt_labels, transpiler.transient_channels))
     
     # Signature: void evaluate_channels(double* phys, double* virt, double* trans)
         # double* phys: physical channel array (read)
@@ -550,4 +678,4 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
     lines.extend(["}", "", "// End of generated code"])
     if tab_spaces > 0:
         lines = [line.replace('\t', ' ' * tab_spaces) for line in lines]
-    return ("\n".join(lines), transpiler.tr_idx)
+    return "\n".join(lines)
