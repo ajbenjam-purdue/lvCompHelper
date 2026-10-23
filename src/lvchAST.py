@@ -307,6 +307,7 @@ class CMathTranspiler(ast.NodeVisitor):
         self.function_deps: set[str] = set()
         self.builtin_deps: set[str] = set()
         self.tr_idx: int = 0
+        self.transient_channels:list[str] = []
 
     def transpile(self, expr_str: str) -> tuple[str, set[str], str]:
         """Transpile a string and return the result and its dependencies
@@ -455,8 +456,9 @@ class CMathTranspiler(ast.NodeVisitor):
             
             args:list[str] = [arg for arg in args_raw]
             
-            for _ in range(func.transient_registers):
+            for i in range(func.transient_registers):
                 args.append(f"&trans[{self.tr_idx}]")
+                self.transient_channels.append(f'{func.name}:{func.args_tr[i]}')
                 self.tr_idx += 1
             
             self.function_deps.add(func_name)
