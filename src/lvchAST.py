@@ -209,7 +209,7 @@ class Elapsed(Function):
     Return the elapsed time from the start of the logging in seconds.
     """
 
-class Time_delta(Function):
+class Time_Delta(Function):
     name:str = "time_delta"
     args_py:list[str] = []
     args_tr:list[str] = ["prev_s", "prev_ns"]
@@ -235,6 +235,23 @@ class Time_delta(Function):
     docstring:str = """
     Return the elapsed time from the start of the logging in seconds (or zero on startup).
     """
+
+class Delta(Function):
+    name:str = "delta"
+    args_py:list[str] = ["x"]
+    args_tr:list[str] = ["x_0"]
+    header_dependencies:list[str] = []
+    body:str = """
+    // Difference between current tick and last
+    double result = x - *x_0;
+    *x_0 = x; // Previous value is current
+    return result;
+    """ 
+    docstring:str = """
+    Return the difference between the variable in the current iteration and the variable in the previous iteration
+    x: The variable to delta
+    """
+    
 
 class _safe_divide(Function):
     name:str = "_safe_divide"
