@@ -545,7 +545,7 @@ def _produce_c_return_funcs(phys_channels:list[str], virt_labels:list[str], virt
     def _produce_c_return_func(name:str, ret:int, enable_def_line:bool, tab_spaces:int=0) -> str:
         tab_char = " " * tab_spaces if tab_spaces > 0 else "\t"
     
-        return f"{f"#define LVCH_{name.upper()} {ret}\n\n" if enable_def_line else ""}int {name}() {{\n{tab_char}return {ret};\n}}"
+        return f"{f"#define LVCH_{name.upper()} {ret}\n\n" if enable_def_line else ""}int32_t {name}() {{\n{tab_char}return {ret};\n}}"
     
     return [_produce_c_return_func(name, ret, debug, tab_spaces) for name, ret in [
                       ("get_physical_register_count", len(phys_channels)), 
@@ -669,8 +669,7 @@ void evaluate_channels (const double* phys, double* virt, double* trans) {{}}
 """
     
     # Get header deps
-    header_deps:set[str] = set()
-    dep:str|None = None
+    header_deps:set[str] = set(["#include <stdint.h>"])
     
     def _get_dependency(a:str) -> str|None:
         if a.strip().endswith('.h'):
