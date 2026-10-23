@@ -139,6 +139,26 @@ class PIDa(Function):
     out_hi: output limit high
     """
 
+class EMA(Function):
+    name:str = "EMA"
+    args_py:list[str] = ["x", "alpha"]
+    args_tr:list[str] = ["x_0"]
+    header_dependencies:list[str] = []
+    body:str = """
+    // Exponential moving average
+    
+    double result = alpha * x + (1 - alpha) * *x_0;
+    *x_0 = x;
+    
+    // Filter value
+    return result;
+    """
+    docstring:str = """
+    Create an exponential moving average filter with smoothing factor alpha
+    x: the process variable to smooth
+    alpha: the smoothing factor, where 1 corresponds to no filter (direct) and approaching 0 reduces the system's response
+    """
+
 class Elapsed(Function):
     name:str = "elapsed"
     args_py:list[str] = []
