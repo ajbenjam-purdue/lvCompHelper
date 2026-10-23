@@ -34,7 +34,8 @@ if __name__ == "__main__":
             "time_delta()",
             "slew_limit(test_pid, 0.2)",
             "delta(test_pid)"
-        ]
+        ],
+        debug=True
     )
     
     try:
