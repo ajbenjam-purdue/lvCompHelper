@@ -581,6 +581,37 @@ static void print_registers(double* phys, double* virt, double* trans) {{
     return res+"}\n"
 
 
+# File Transfer Methods
+def transfer_ftp(host:str, username:str, password:str, local_file:str, remote_file:str, permissions:str|None=None, timeout:float|None=None) -> bool:
+    try:
+        with ftplib.FTP(host, timeout=timeout) as ftp:
+            try:
+                ftp.login(username, password)
+                logger.info(f"Logged in to {username}@{host}")
+                
+                with open(local_file, 'rb') as l_file:
+                    ftp.storbinary(f"STOR {remote_file}", l_file)
+                logger.info(f"Uploaded {local_file} to {remote_file}")    
+                
+            except Exception as e:
+                logger.error(f"Upload error: {e}")
+                return False
+            
+            if permissions == None: return True
+            
+            # Attempt perm change
+            try:
+                response = ftp.sendcmd(f"SITE CHMOD {permissions} {remote_file}")
+                logger.info(f"Response: {response}")
+                return True
+            except Exception as e:
+                logger.error(f"Permission override error: {e}")
+                return False
+    except Exception as e:
+        logger.error(f"{e}")
+        return False
+
+# External Methods
 def get_functions() -> list[str]:
     transpiler = CMathTranspiler({}, {})
     
