@@ -290,7 +290,7 @@ class CMathTranspiler(ast.NodeVisitor):
     }
 
     # Third party C function names and binds
-    FUNCTIONS:dict[str, type[Function]] = {x.name : x for x in Function.__subclasses__() if not x.name.startswith('_')}
+    FUNCTIONS:dict[str, type[Function]] = {x.name : x for x in Function.__subclasses__()}
 
     def __init__(self, phys_map: dict[str, int], virt_map: dict[str, int]):
         """Create Transpiler object with the provided maps
