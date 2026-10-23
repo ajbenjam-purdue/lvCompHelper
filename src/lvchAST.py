@@ -78,7 +78,7 @@ class Dummy(Function):
 class PID(Function):
     name:str = "PID"
     args_py:list[str] = ["pv", "sp", "gain_p", "gain_d", "gain_i"]
-    args_tr:list[str] = ["last_pv", "acc_err"]
+    args_tr:list[str] = ["last_pv", "acc_err", "init"]
     header_dependencies:list[str] = ["math.h"]
     body:str = """
     // PID Controller
@@ -89,7 +89,10 @@ class PID(Function):
     *acc_err += p_err;            // Integral error
     *last_pv = pv;                // Proc var
     
-    return gain_p * p_err + gain_d * d_err + gain_i * *acc_err;
+    double cmd = *init * (gain_p * p_err + gain_d * d_err + gain_i * *acc_err);
+    *init = 1.0;
+    
+    return cmd;
     """
     docstring:str = """
     Create a transient PID controller following gain logic.
@@ -103,7 +106,7 @@ class PID(Function):
 class PIDa(Function):
     name:str = "PIDa"
     args_py:list[str] = ["pv", "sp", "gain_p", "gain_d", "gain_i", "wu_err", "out_lo", "out_hi"]
-    args_tr:list[str] = ["last_pv", "acc_err"]
+    args_tr:list[str] = ["last_pv", "acc_err", "init"]
     header_dependencies:list[str] = ["math.h"]
     body:str = """
     // Advanced PID Controller
@@ -122,7 +125,8 @@ class PIDa(Function):
     }
     *last_pv = pv; // Proc var
     
-    double cmd = gain_p * p_err + gain_d * d_err + gain_i * *acc_err;
+    double cmd = *init * (gain_p * p_err + gain_d * d_err + gain_i * *acc_err);
+    *init = 1.0;
     
     // Limit output
     return fmin(out_hi, fmax(cmd, out_lo));
@@ -142,13 +146,15 @@ class PIDa(Function):
 class EMA(Function):
     name:str = "EMA"
     args_py:list[str] = ["x", "alpha"]
-    args_tr:list[str] = ["x_0"]
+    args_tr:list[str] = ["x_0", "init"]
     header_dependencies:list[str] = []
     body:str = """
     // Exponential moving average
     
-    double result = alpha * x + (1 - alpha) * *x_0;
+    double result = *init == 0.0 ? x : alpha * x + (1 - alpha) * *x_0;
+    
     *x_0 = x;
+    *init = 1.0;
     
     // Filter value
     return result;
