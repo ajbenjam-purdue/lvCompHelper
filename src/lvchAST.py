@@ -486,6 +486,12 @@ class CMathTranspiler(ast.NodeVisitor):
     def generic_visit(self, node: ast.AST):
         raise ValueError(f"Disallowed syntax in expression: {type(node).__name__}")
 
+def _produce_c_return_func(name:str, ret:int, tab_spaces:int=0) -> str:
+    tab_char = " " * tab_spaces if tab_spaces > 0 else "\t"
+    return f"""int {name}() {{
+{tab_char}return {ret};
+}}"""
+
 def get_functions() -> list[str]:
     transpiler = CMathTranspiler({}, {})
     
@@ -540,6 +546,13 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
             *[str(transpiler.FUNCTIONS[func]())+"\n" for func in transpiler.function_deps],
             "// End generated dependencies\n"
         ])
+    
+    lines.extend(["// Registers\n"] + [_produce_c_return_func(name, ret, tab_spaces)+"\n"
+                  for name, ret in [
+                      ("get_physical_register_count", len(phys_channels)), 
+                      ("get_virtual_register_count", min(len(virt_labels), len(virt_formulas))),
+                      ("get_transient_register_count", transpiler.tr_idx)
+                  ]] + ["// End registers\n"])
     
     # Signature: void evaluate_channels(double* phys, double* virt, double* trans)
         # double* phys: physical channel array (read)
