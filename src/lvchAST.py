@@ -504,8 +504,8 @@ def get_functions() -> list[str]:
     # Show only ext funcs
     return [x for x in math_funcs + cust_funcs if not x.startswith("_")]
 
-def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_formulas: list[str], tab_spaces: int=0) -> tuple[str, int]:
-    # This CAN return a tuple!
+def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_formulas: list[str], tab_spaces: int=0) -> str:
+    # This does not NEED to return a tuple
     phys_map = {name: i for i, name in enumerate(phys_channels)}
     virt_map = {name: i for i, name in enumerate(virt_labels)}
 
@@ -571,4 +571,4 @@ def generate_c_library(phys_channels: list[str], virt_labels: list[str], virt_fo
     lines.extend(["}", "", "// End of generated code"])
     if tab_spaces > 0:
         lines = [line.replace('\t', ' ' * tab_spaces) for line in lines]
-    return ("\n".join(lines), transpiler.tr_idx)
+    return "\n".join(lines)
