@@ -216,7 +216,7 @@ class Time_delta(Function):
     name:str = "time_delta"
     args_py:list[str] = []
     args_tr:list[str] = ["prev_s", "prev_ns"]
-    header_dependencies:list[str] = ["time.h"]
+    header_dependencies:list[str] = ["time.h", "_POSIX_C_SOURCE 199309L"]
     body:str = """
     // Elapsed time in seconds
     
