@@ -625,7 +625,7 @@ static void print_registers(double* phys, double* virt, double* trans) {{
     return res+"}\n"
 
 
-# File Transfer Methods
+# File Transfer Methods (evil and nonfunctional. it seems cDAQs only serve webDAV, not FTP by default)
 def transfer_ftp(host:str, username:str, password:str, local_file:str, remote_file:str, permissions:str|None=None, timeout:float|None=None) -> bool:
     try:
         with ftplib.FTP(host, timeout=timeout) as ftp:

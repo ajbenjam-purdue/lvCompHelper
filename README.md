@@ -14,14 +14,16 @@ The transpiler function is `generate_c_library`, with the signature:
 def generate_c_library(
     phys_channels: list[str], 
     virt_labels: list[str], 
-    virt_formulas: list[str]
-) -> tuple[str, int]:
+    virt_formulas: list[str], 
+    tab_spaces: int = 0, 
+    debug: bool = False
+) -> str:
 ```
 
  - `phys_channels` represents a list of user-defined labels for each of the input values.
  - `virt_labels` represents a list of user-defined labels for each of the output values.
  - `virt_formulas` represents a list of user-defined functions in Python syntax to evaluate for each of the output values.
 
-The return is a tuple of a `str` containing the generated code and an `int` containing a count of transient registers to reserve. The string is intended to be sent to and compiled on the remote target during a setup phase, where the resulting `.so` will be called.
+The return is a `str` containing the generated code. The string is intended to be sent to and compiled on the remote target during a setup phase, where the resulting `.so` will be called. Register counts are now compiled into `int get_{register type}_register_count();` within the SO.
 
 For information on usage, see [ref.md](/ref.md). For a demonstration of the main function, see [main.py](/src/main.py) and subsequently the generated code in [main.c](/src/main.c).
