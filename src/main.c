@@ -7,8 +7,80 @@
 
 #include <math.h>
 #include <time.h>
+#include <stdint.h>
 
 // Generated dependencies
+
+double PIDa(double pv, double sp, double gain_p, double gain_d, double gain_i, double wu_err, double out_lo, double out_hi, double* last_pv, double* acc_err, double* init) {
+	
+	// Advanced PID Controller
+	// Uses pure gains (not times)
+	// Includes an anti-windup maximum proportional error
+	// If |pv-sp| is greater than this, integration does not occur
+	// Includes low and high limits for the output
+	
+	double p_err = sp - pv;       // Proportional error
+	double d_err = *last_pv - pv; // Derivative error
+	if (fabs(p_err) <= wu_err) {
+	*acc_err += p_err; // Integral error
+	}
+	*last_pv = pv; // Proc var
+	
+	double cmd = gain_p * p_err + *init * (gain_d * d_err + gain_i * *acc_err);
+	*init = 1.0;
+	
+	// Limit output
+	return fmin(out_hi, fmax(cmd, out_lo));
+	
+}
+
+double elapsed(double* start_s, double* start_ns) {
+	
+	// Elapsed time in seconds
+	
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	
+	if (*start_s == 0.0) {
+	*start_s  = (double)now.tv_sec;
+	*start_ns = (double)now.tv_nsec;
+	return 0.0;
+	}
+	
+	double total_elapsed = (now.tv_sec - *start_s) + (now.tv_nsec - *start_ns) * 1e-9;
+	return total_elapsed;
+	
+}
+
+double delta(double x, double* x_0) {
+	
+	// Difference between current tick and last
+	double result = x - *x_0;
+	*x_0 = x; // Previous value is current
+	return result;
+	
+}
+
+double time_delta(double* prev_s, double* prev_ns) {
+	
+	// Elapsed time in seconds
+	
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	
+	if (*prev_s == 0.0) {
+	*prev_s  = (double)now.tv_sec;
+	*prev_ns = (double)now.tv_nsec;
+	return 1.0;
+	}
+	
+	double elapsed = (now.tv_sec - *prev_s) + (now.tv_nsec - *prev_ns) * 1e-9;
+	*prev_s = (double)now.tv_sec;
+	*prev_ns = (double)now.tv_nsec;
+	
+	return elapsed;
+	
+}
 
 double slew_limit(double pv, double rate, double* pv_0, double* init) {
 	
@@ -22,6 +94,19 @@ double slew_limit(double pv, double rate, double* pv_0, double* init) {
 	
 	// Limit the slew
 	return result;
+	
+}
+
+double derivative(double y, double x, double* x_0, double* y_0) {
+	
+	// Difference between current tick and last
+	double res_x = x - *x_0;
+	double res_y = y - *y_0;
+	
+	*x_0 = x; // Previous value is current
+	*y_0 = y;
+	
+	return res_x == 0 ? 0.0 : res_y / res_x;
 	
 }
 
@@ -56,95 +141,24 @@ double EMA(double x, double alpha, double* x_0, double* init) {
 	
 }
 
-double PIDa(double pv, double sp, double gain_p, double gain_d, double gain_i, double wu_err, double out_lo, double out_hi, double* last_pv, double* acc_err, double* init) {
-	
-	// Advanced PID Controller
-	// Uses pure gains (not times)
-	// Includes an anti-windup maximum proportional error
-	// If |pv-sp| is greater than this, integration does not occur
-	// Includes low and high limits for the output
-	
-	double p_err = sp - pv;       // Proportional error
-	double d_err = *last_pv - pv; // Derivative error
-	if (fabs(p_err) <= wu_err) {
-	*acc_err += p_err; // Integral error
-	}
-	*last_pv = pv; // Proc var
-	
-	double cmd = gain_p * p_err + *init * (gain_d * d_err + gain_i * *acc_err);
-	*init = 1.0;
-	
-	// Limit output
-	return fmin(out_hi, fmax(cmd, out_lo));
-	
-}
-
-double delta(double x, double* x_0) {
-	
-	// Difference between current tick and last
-	double result = x - *x_0;
-	*x_0 = x; // Previous value is current
-	return result;
-	
-}
-
-double elapsed(double* start_s, double* start_ns) {
-	
-	// Elapsed time in seconds
-	
-	struct timespec now;
-	clock_gettime(CLOCK_MONOTONIC, &now);
-	
-	if (*start_s == 0.0) {
-	*start_s  = (double)now.tv_sec;
-	*start_ns = (double)now.tv_nsec;
-	return 0.0;
-	}
-	
-	double total_elapsed = (now.tv_sec - *start_s) + (now.tv_nsec - *start_ns) * 1e-9;
-	return total_elapsed;
-	
-}
-
-double time_delta(double* prev_s, double* prev_ns) {
-	
-	// Elapsed time in seconds
-	
-	struct timespec now;
-	clock_gettime(CLOCK_MONOTONIC, &now);
-	
-	if (*prev_s == 0.0) {
-	*prev_s  = (double)now.tv_sec;
-	*prev_ns = (double)now.tv_nsec;
-	return 1.0;
-	}
-	
-	double elapsed = (now.tv_sec - *prev_s) + (now.tv_nsec - *prev_ns) * 1e-9;
-	*prev_s = (double)now.tv_sec;
-	*prev_ns = (double)now.tv_nsec;
-	
-	return elapsed;
-	
-}
-
 // End generated dependencies
 
 // Registers
 
 #define LVCH_GET_PHYSICAL_REGISTER_COUNT 1
 
-int get_physical_register_count() {
+int32_t get_physical_register_count() {
 	return 1;
 }
-#define LVCH_GET_VIRTUAL_REGISTER_COUNT 10
+#define LVCH_GET_VIRTUAL_REGISTER_COUNT 11
 
-int get_virtual_register_count() {
-	return 10;
+int32_t get_virtual_register_count() {
+	return 11;
 }
-#define LVCH_GET_TRANSIENT_REGISTER_COUNT 15
+#define LVCH_GET_TRANSIENT_REGISTER_COUNT 17
 
-int get_transient_register_count() {
-	return 15;
+int32_t get_transient_register_count() {
+	return 17;
 }
 // End registers
 
@@ -154,8 +168,8 @@ int get_transient_register_count() {
 
 static void print_registers(double* phys, double* virt, double* trans) {
 	printf("Physical registers\n  phys_0=%.6f\n", phys[0]);
-	printf("Virtual registers\n  test_math_0=%.6f\n  test_math_1=%.6f\n  test_math_2=%.6f\n  test_pid=%.6f\n  test_pida=%.6f\n  test_ema=%.6f\n  test_elapsed=%.6f\n  test_time_delta=%.6f\n  test_slew_limit=%.6f\n  test_delta=%.6f\n", virt[0], virt[1], virt[2], virt[3], virt[4], virt[5], virt[6], virt[7], virt[8], virt[9]);
-	printf("Transient registers\n  PID:last_pv=%.6f\n  PID:acc_err=%.6f\n  PID:init=%.6f\n  PIDa:last_pv=%.6f\n  PIDa:acc_err=%.6f\n  PIDa:init=%.6f\n  EMA:x_0=%.6f\n  EMA:init=%.6f\n  elapsed:start_s=%.6f\n  elapsed:start_ns=%.6f\n  time_delta:prev_s=%.6f\n  time_delta:prev_ns=%.6f\n  slew_limit:pv_0=%.6f\n  slew_limit:init=%.6f\n  delta:x_0=%.6f\n", trans[0], trans[1], trans[2], trans[3], trans[4], trans[5], trans[6], trans[7], trans[8], trans[9], trans[10], trans[11], trans[12], trans[13], trans[14]);
+	printf("Virtual registers\n  test_math_0=%.6f\n  test_math_1=%.6f\n  test_math_2=%.6f\n  test_pid=%.6f\n  test_pida=%.6f\n  test_ema=%.6f\n  test_elapsed=%.6f\n  test_time_delta=%.6f\n  test_slew_limit=%.6f\n  test_delta=%.6f\n  test_derivative=%.6f\n", virt[0], virt[1], virt[2], virt[3], virt[4], virt[5], virt[6], virt[7], virt[8], virt[9], virt[10]);
+	printf("Transient registers\n  PID:last_pv=%.6f\n  PID:acc_err=%.6f\n  PID:init=%.6f\n  PIDa:last_pv=%.6f\n  PIDa:acc_err=%.6f\n  PIDa:init=%.6f\n  EMA:x_0=%.6f\n  EMA:init=%.6f\n  elapsed:start_s=%.6f\n  elapsed:start_ns=%.6f\n  time_delta:prev_s=%.6f\n  time_delta:prev_ns=%.6f\n  slew_limit:pv_0=%.6f\n  slew_limit:init=%.6f\n  delta:x_0=%.6f\n  derivative:x_0=%.6f\n  derivative:y_0=%.6f\n", trans[0], trans[1], trans[2], trans[3], trans[4], trans[5], trans[6], trans[7], trans[8], trans[9], trans[10], trans[11], trans[12], trans[13], trans[14], trans[15], trans[16]);
 }
 
 int evaluate_channels (const double* phys, double* virt, double* trans) {
@@ -189,15 +203,20 @@ int evaluate_channels (const double* phys, double* virt, double* trans) {
 	// test_slew_limit = slew_limit(test_pid, 0.2)
 	virt[8] = slew_limit(virt[3], 0.2, &trans[12], &trans[13]);
 
-	// test_delta = delta(test_pid)
-	virt[9] = delta(virt[3], &trans[14]);
+	// test_delta = delta(test_elapsed)
+	virt[9] = delta(virt[6], &trans[14]);
+
+	// test_derivative = derivative(test_ema, test_elapsed)
+	virt[10] = derivative(virt[5], virt[6], &trans[15], &trans[16]);
 
 	return 0;
 }
 
 // End of generated code
 
-#define LVCH_TRIALS 100
+#define LVCH_TRIALS 20
+
+struct timespec ts = {0, 100000000}; 
 
 int main() {
 
@@ -210,7 +229,7 @@ int main() {
     for (size_t i = 0; i < LVCH_TRIALS; i++) {
         printf("Trial %zu / %d\n", i+1, LVCH_TRIALS);
         evaluate_channels(physical_values, virtual_values, transient_registers);
-        // print_registers(physical_values, virtual_values, transient_registers);
+        nanosleep(&ts, NULL);
     }
     print_registers(physical_values, virtual_values, transient_registers);
     

@@ -21,7 +21,8 @@ if __name__ == "__main__":
             "test_elapsed", 
             "test_time_delta", 
             "test_slew_limit",
-            "test_delta"
+            "test_delta",
+            "test_derivative"
         ], 
         virt_formulas = [
             "log10(abs(phys_0)+1.0) ** 2",
@@ -33,7 +34,8 @@ if __name__ == "__main__":
             "elapsed()",
             "time_delta()",
             "slew_limit(test_pid, 0.2)",
-            "delta(test_pid)"
+            "delta(test_elapsed)",
+            "derivative(test_ema, test_elapsed)"
         ],
         debug=True
     )
