@@ -169,11 +169,16 @@ class Slew_Limiter(Function):
     body:str = """
     // Slew limiter
     
-    double err = *init * (pv - *pv_0);
-    double result = *pv_0 + fmin(fmax(err, -rate), rate);
+    // Init check
+    if (*init == 0.0) {
+        *pv_0 = pv;
+        *init = 1.0;
+        return pv;
+    }
     
+    double err = pv - *pv_0;
+    double result = *pv_0 + fmin(fmax(err, -rate), rate);
     *pv_0 = result;
-    *init = 1.0;
     
     // Limit the slew
     return result;
@@ -222,7 +227,7 @@ class Time_Delta(Function):
     if (*prev_s == 0.0) {
         *prev_s  = (double)now.tv_sec;
         *prev_ns = (double)now.tv_nsec;
-        return 1.0;
+        return 0.0;
     }
     
     double elapsed = (now.tv_sec - *prev_s) + (now.tv_nsec - *prev_ns) * 1e-9;
@@ -232,23 +237,62 @@ class Time_Delta(Function):
     return elapsed;
     """
     docstring:str = """
-    Return the elapsed time from the start of the logging in seconds (or zero on startup).
+    Return the elapsed time from the start of the logging in seconds (or 0.0 on startup).
     """
 
 class Delta(Function):
     name:str = "delta"
     args_py:list[str] = ["x"]
-    args_tr:list[str] = ["x_0"]
+    args_tr:list[str] = ["x_0", "init"]
     header_dependencies:list[str] = []
     body:str = """
+    
+    // Init check
+    if (*init == 0.0) {
+        *init = 1;
+        *x_0 = x;
+        return 0.0;
+    }
+    
     // Difference between current tick and last
     double result = x - *x_0;
     *x_0 = x; // Previous value is current
+    
     return result;
     """ 
     docstring:str = """
-    Return the difference between the variable in the current iteration and the variable in the previous iteration
+    Return the difference between the variable in the current iteration and the variable in the previous iteration. If evaluated on the first tick, returns 0.
     x: The variable to delta
+    """
+
+class Derivative(Function):
+    name:str = "derivative"
+    args_py:list[str] = ["y", "x"]
+    args_tr:list[str] = ["x_0", "y_0", "init"]
+    header_dependencies:list[str] = []
+    body:str = """
+    
+    // Init check
+    if (*init == 0.0) {
+        *x_0 = x;
+        *y_0 = y;
+        *init = 1.0;
+        return 0.0;
+    }
+    
+    // Difference between current tick and last
+    double res_x = x - *x_0;
+    double res_y = y - *y_0;
+    
+    *x_0 = x; // Previous value is current
+    *y_0 = y;
+    
+    return res_x == 0 ? 0.0 : res_y / res_x;
+    """ 
+    docstring:str = """
+    Return the differentiation of y with respect to x. If dx = 0 or evaluated on the first tick, returns 0.0.
+    y: The process variable
+    x: The variable to derive with respect to
     """
     
 class _safe_divide(Function): # type: ignore
